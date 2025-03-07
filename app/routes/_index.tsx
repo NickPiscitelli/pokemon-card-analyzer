@@ -166,124 +166,73 @@ export default function Index() {
   };
   
   // Handle border adjustments
-  const handleAdjustBorder = async (
-    type: 'outerEdges' | 'yellowBorder' | 'innerEdges',
-    direction: 'left' | 'right' | 'top' | 'bottom',
-    amount: number,
-    algorithm?: 'Yellow' | 'Canny' | 'PSA'
-  ) => {
-    if (!cardAnalyzerRef.current || !analysisResult) {
+  const handleAdjustBorder = async (type: 'outer' | 'inner', direction: 'left' | 'right' | 'top' | 'bottom', amount: number) => {
+    if (!cardAnalyzerRef.current || !analysisResult || !analysisResult.fullImageData) {
       console.warn('Cannot adjust borders: analyzer not available or no analysis result');
       return;
     }
     
     try {
-      // Use the algorithm from the UI if provided, or fall back to what's stored
-      let algoType = analysisResult.detectionMethod || 'Canny Edge Detection';
+      console.log('Adjusting borders:', { type, direction, amount });
       
-      // Check if this is just an algorithm change (amount is 0)
-      const isAlgorithmChange = amount === 0 && algorithm;
+      // Update measurements
+      const updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, amount);
+      console.log('Updated measurements:', updatedMeasurements);
       
-      // Override with the UI-selected algorithm if provided
-      if (algorithm) {
-        if (algorithm === 'Yellow') {
-          algoType = 'Yellow Border Detection';
-        } else if (algorithm === 'Canny') {
-          algoType = 'Canny Edge Detection';
-        } else if (algorithm === 'PSA') {
-          algoType = 'PSA Template';
-        }
-        // Update the algorithm in the analyzer if needed
-        cardAnalyzerRef.current.detectionMethod = algoType;
+      // Get current edges
+      const currentEdges = cardAnalyzerRef.current.getCurrentEdges();
+      console.log('Current edges:', currentEdges);
+      
+      if (!currentEdges) {
+        console.warn('Current edges not available');
+        return;
       }
       
-      let updatedMeasurements;
+      // Create a temporary canvas to hold the full image
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      if (!tempCtx) throw new Error('Could not get canvas context');
       
-      // If it's just an algorithm change, do a full reanalysis
-      if (isAlgorithmChange && analysisResult.imageUrl) {
-        // Create a new image to reanalyze
-        const img = new Image();
-        img.src = analysisResult.imageUrl;
-        
-        // We need to wait for the image to load before reanalyzing
-        const reanalysisPromise = new Promise<void>((resolve) => {
-          img.onload = async () => {
-            try {
-              // Reanalyze the image with the new algorithm setting
-              const result = await cardAnalyzerRef.current.analyzeCard(img);
-              
-              // Update measurements from reanalysis
-              updatedMeasurements = result.measurements;
-              
-              // Update card edges from reanalysis
-              cardAnalyzerRef.current.cardEdges = result.analyzer?.cardEdges || null;
-              
-              resolve();
-            } catch (error) {
-              console.error('Error reanalyzing with new algorithm:', error);
-              // Fall back to regular adjustment
-              updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, 0);
-              resolve();
-            }
-          };
-          
-          img.onerror = () => {
-            console.error('Error loading image for reanalysis');
-            // Fall back to regular adjustment
-            updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, 0);
-            resolve();
-          };
-        });
-        
-        // Wait for reanalysis to complete
-        await reanalysisPromise;
-      } else {
-        // Call the normal adjustment method if it's not an algorithm change
-        updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, amount);
-      }
+      // Set canvas dimensions to match the image data
+      tempCanvas.width = analysisResult.fullImageData.width;
+      tempCanvas.height = analysisResult.fullImageData.height;
       
-      // For all adjustment types, update the overlay using the full image data
-      const fullImageData = analysisResult.fullImageData;
-      const edges = cardAnalyzerRef.current.cardEdges;
+      // Draw the full image data to the canvas
+      tempCtx.putImageData(analysisResult.fullImageData, 0, 0);
       
-      if (fullImageData && edges) {
-        // Create a new edge overlay using the full original image
-        const edgeOverlay = cardAnalyzerRef.current.createEdgeOverlay(fullImageData, edges);
-        
-        // Convert to data URL for display
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          canvas.width = edgeOverlay.width;
-          canvas.height = edgeOverlay.height;
-          ctx.putImageData(edgeOverlay, 0, 0);
-          const edgeOverlayUrl = canvas.toDataURL('image/png');
-          
-          // Update the analysis result - the card image data and full image data
-          // are now the same (both are the full image)
-          const updatedResult: CardAnalysisResult = {
-            ...analysisResult,
-            measurements: updatedMeasurements,
-            cardImageData: fullImageData, // Use the same full image data
-            edgeOverlayImageData: edgeOverlay,
-            edgeOverlayUrl,
-            potentialGrade: cardAnalyzerRef.current.calculatePotentialGrade(updatedMeasurements),
-            detectionMethod: algoType // Preserve the detection method
-          };
-          
-          setAnalysisResult(updatedResult);
-        }
-      } else {
-        // Just update the measurements if we can't regenerate the overlay
-        const baseResult: CardAnalysisResult = {
-          ...analysisResult,
+      // Create a new edge overlay using the canvas as the source with both edge types
+      const newEdgeOverlay = cardAnalyzerRef.current.generateEdgeOverlay(
+        tempCanvas,
+        currentEdges,
+        null
+      );
+      console.log('Generated new edge overlay:', { width: newEdgeOverlay.width, height: newEdgeOverlay.height });
+      
+      // Convert the overlay to a data URL
+      const overlayCanvas = document.createElement('canvas');
+      overlayCanvas.width = newEdgeOverlay.width;
+      overlayCanvas.height = newEdgeOverlay.height;
+      const overlayCtx = overlayCanvas.getContext('2d');
+      if (!overlayCtx) throw new Error('Could not get canvas context');
+      
+      overlayCtx.putImageData(newEdgeOverlay, 0, 0);
+      const newOverlayUrl = overlayCanvas.toDataURL();
+      console.log('Generated new edge overlay URL');
+      
+      // Update the analysis result
+      setAnalysisResult(prevState => {
+        if (!prevState) return prevState;
+        console.log('Updating analysis result with new overlay');
+        return {
+          ...prevState,
           measurements: updatedMeasurements,
-          potentialGrade: cardAnalyzerRef.current.calculatePotentialGrade(updatedMeasurements),
-          detectionMethod: algoType // Preserve the detection method
+          edgeOverlayImageData: newEdgeOverlay,
+          edgeOverlayUrl: newOverlayUrl,
+          potentialGrade: cardAnalyzerRef.current!.getPotentialGrade(updatedMeasurements),
+          detectionMethod: cardAnalyzerRef.current!.detectionMethod
         };
-        
-        setAnalysisResult(baseResult);
-      }
+      });
+      
     } catch (error) {
       console.error('Error adjusting borders:', error);
     }

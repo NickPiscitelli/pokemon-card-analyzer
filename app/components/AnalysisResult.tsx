@@ -20,10 +20,9 @@ interface AnalysisResultProps {
   onBack: () => void;
   onReset: () => void;
   onAdjustBorder?: (
-    type: 'outerEdges' | 'yellowBorder' | 'innerEdges',
+    type: 'outer' | 'inner',
     direction: 'left' | 'right' | 'top' | 'bottom',
-    amount: number,
-    algorithm?: 'Yellow' | 'Canny' | 'PSA'
+    amount: number
   ) => void;
 }
 
@@ -36,25 +35,36 @@ export default function AnalysisResult({
   onReset,
   onAdjustBorder
 }: AnalysisResultProps) {
-  const [isDebugMode, setIsDebugMode] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
   const [showAdjustmentControls, setShowAdjustmentControls] = useState(true);
-  const [adjustmentType, setAdjustmentType] = useState<'outerEdges' | 'yellowBorder' | 'innerEdges'>('yellowBorder');
-  const [algorithm, setAlgorithm] = useState<'Yellow' | 'Canny' | 'PSA'>('Canny');
+  const [adjustmentType, setAdjustmentType] = useState<'outer' | 'inner'>('outer');
+  const [focusedBorder, setFocusedBorder] = useState<'left' | 'right' | 'top' | 'bottom' | null>(null);
+  const [zoomFocus, setZoomFocus] = useState(true);
+  const [showZoomOverlay, setShowZoomOverlay] = useState(false);
+  const [zoomPosition, setZoomPosition] = useState({ x: 0, y: 0 });
+  const [activeEdgeType, setActiveEdgeType] = useState<'outer' | 'inner'>('outer');
+  const [zoomLevel, setZoomLevel] = useState<'fit' | 'full' | 'custom'>('fit');
+  const [customZoom, setCustomZoom] = useState(100); // percentage
   
+    
   // Effect to handle algorithm changes
   useEffect(() => {
     // When algorithm changes, trigger a border adjustment to update detection
     if (onAdjustBorder && focusedBorder) {
       // Make a minimal adjustment that won't be noticeable but will trigger a redraw with new algorithm
-      onAdjustBorder(adjustmentType, focusedBorder, 0, algorithm);
+      onAdjustBorder(adjustmentType, focusedBorder, 0);
     }
-  }, [algorithm, onAdjustBorder, focusedBorder, adjustmentType]);
-  const [zoomFocus, setZoomFocus] = useState(true);
-  const [focusedBorder, setFocusedBorder] = useState<'left' | 'right' | 'top' | 'bottom' | null>('left');
-  const [zoomLevel, setZoomLevel] = useState<'fit' | 'full' | 'custom'>('fit');
-  const [customZoom, setCustomZoom] = useState(100); // percentage
-  const [showZoomOverlay, setShowZoomOverlay] = useState(false);
-  const [zoomPosition, setZoomPosition] = useState({ x: 0, y: 0 });
+  }, [onAdjustBorder, focusedBorder, adjustmentType]);
+  
+  // Add effect to log URL changes
+  useEffect(() => {
+    console.log('AnalysisResult received new overlay URL:', edgeOverlayUrl);
+  }, [edgeOverlayUrl]);
+  
+  // Add effect to log measurement changes
+  useEffect(() => {
+    console.log('AnalysisResult received new measurements:', measurements);
+  }, [measurements]);
   
   const { 
     leftBorder, 
@@ -143,7 +153,7 @@ export default function AnalysisResult({
   
   // Toggle debug mode
   const toggleDebug = () => {
-    setIsDebugMode(!isDebugMode);
+    setShowDebug(!showDebug);
   };
   
   // Toggle adjustment controls
@@ -151,52 +161,9 @@ export default function AnalysisResult({
     setShowAdjustmentControls(!showAdjustmentControls);
   };
   
-  // Toggle between zoom modes
-  const toggleZoomMode = () => {
-    // Cycle through zoom modes: fit -> full -> custom -> fit
-    if (zoomLevel === 'fit') {
-      setZoomLevel('full');
-    } else if (zoomLevel === 'full') {
-      setZoomLevel('custom');
-    } else {
-      setZoomLevel('fit');
-    }
-  };
-  
-  // Adjust custom zoom level
-  const adjustZoom = (amount: number) => {
-    setZoomLevel('custom');
-    setCustomZoom(prev => Math.max(50, Math.min(200, prev + amount)));
-  };
-  
-  // Get image class based on zoom level
-  const getImageClass = () => {
-    if (!isDebugMode) return 'w-full rounded-lg shadow-md';
-    
-    switch (zoomLevel) {
-      case 'fit':
-        return 'max-h-[70vh] object-contain mx-auto rounded-lg shadow-md';
-      case 'full':
-        return 'w-full h-auto rounded-lg shadow-md';
-      case 'custom':
-        return `rounded-lg shadow-md mx-auto`;
-    }
-  };
-  
-  // Get image style based on zoom level
-  const getImageStyle = () => {
-    if (zoomLevel === 'custom') {
-      return { 
-        width: `${customZoom}%`,
-        maxWidth: '100%'
-      };
-    }
-    return {};
-  };
-  
   // Handle border adjustment
   const handleAdjustBorder = (
-    type: 'outerEdges' | 'yellowBorder' | 'innerEdges',
+    type: 'outer' | 'inner',
     direction: 'left' | 'right' | 'top' | 'bottom', 
     amount: number
   ) => {
@@ -207,8 +174,8 @@ export default function AnalysisResult({
       // Set the focused border to the direction being adjusted
       setFocusedBorder(direction);
       
-      // Pass the current algorithm to the parent component
-      onAdjustBorder(type, direction, adjustmentAmount, algorithm);
+      // Call the parent's onAdjustBorder
+      onAdjustBorder(type, direction, adjustmentAmount);
       
       // If zoom focus is enabled, show the zoom overlay
       if (zoomFocus) {
@@ -348,6 +315,49 @@ export default function AnalysisResult({
     };
   };
   
+  // Toggle between zoom modes
+  const toggleZoomMode = () => {
+    // Cycle through zoom modes: fit -> full -> custom -> fit
+    if (zoomLevel === 'fit') {
+      setZoomLevel('full');
+    } else if (zoomLevel === 'full') {
+      setZoomLevel('custom');
+    } else {
+      setZoomLevel('fit');
+    }
+  };
+  
+  // Adjust custom zoom level
+  const adjustZoom = (amount: number) => {
+    setZoomLevel('custom');
+    setCustomZoom(prev => Math.max(50, Math.min(200, prev + amount)));
+  };
+  
+  // Get image class based on zoom level
+  const getImageClass = () => {
+    if (!showDebug) return 'w-full rounded-lg shadow-md';
+    
+    switch (zoomLevel) {
+      case 'fit':
+        return 'max-h-[70vh] object-contain mx-auto rounded-lg shadow-md';
+      case 'full':
+        return 'w-full h-auto rounded-lg shadow-md';
+      case 'custom':
+        return `rounded-lg shadow-md mx-auto`;
+    }
+  };
+  
+  // Get image style based on zoom level
+  const getImageStyle = () => {
+    if (zoomLevel === 'custom') {
+      return { 
+        width: `${customZoom}%`,
+        maxWidth: '100%'
+      };
+    }
+    return {};
+  };
+  
   return (
     <div className="flex flex-col lg:flex-row gap-6 w-full max-w-6xl mx-auto bg-white rounded-lg shadow-lg p-6">
       <div className="flex-1 flex flex-col items-center">
@@ -366,7 +376,7 @@ export default function AnalysisResult({
             {/* Zoom Overlay - shows when border adjustments are made */}
             {showZoomOverlay && (
               <div 
-                className="absolute bg-white border-4 border-blue-500 shadow-lg overflow-hidden transition-all duration-300 transform scale-100 z-10" 
+                className="absolute bg-white border-4 border-black shadow-lg overflow-hidden transition-all duration-300 transform scale-100 z-10" 
                 style={{
                   right: '10px',
                   top: '10px',
@@ -381,12 +391,12 @@ export default function AnalysisResult({
                     backgroundImage: `url(${edgeOverlayUrl || imageUrl})`,
                     backgroundSize: '400%',
                     backgroundPosition: focusedBorder === 'left' ? '15% 50%' : 
-                                       focusedBorder === 'right' ? '85% 50%' : 
-                                       focusedBorder === 'top' ? '50% 15%' : 
-                                       focusedBorder === 'bottom' ? '50% 85%' : '50% 50%',
+                                      focusedBorder === 'right' ? '85% 50%' : 
+                                      focusedBorder === 'top' ? '50% 15%' : 
+                                      focusedBorder === 'bottom' ? '50% 85%' : '50% 50%',
                   }}
                 ></div>
-                <div className="absolute bottom-2 right-2 bg-blue-700 text-white text-xs px-2 py-0.5 rounded opacity-75">
+                <div className="absolute bottom-2 right-2 bg-black text-white text-xs px-2 py-0.5 rounded opacity-75">
                   3x
                 </div>
                 {/* Border indicator */}
@@ -397,8 +407,8 @@ export default function AnalysisResult({
                 
                 {/* Crosshair */}
                 <div className="absolute left-1/2 top-1/2 w-8 h-8 pointer-events-none opacity-60" style={{ transform: 'translate(-50%, -50%)' }}>
-                  <div className="absolute left-1/2 top-0 bottom-0 w-px bg-blue-600"></div>
-                  <div className="absolute top-1/2 left-0 right-0 h-px bg-blue-600"></div>
+                  <div className="absolute left-1/2 top-0 bottom-0 w-px bg-black"></div>
+                  <div className="absolute top-1/2 left-0 right-0 h-px bg-black"></div>
                 </div>
               </div>
             )}
@@ -409,7 +419,7 @@ export default function AnalysisResult({
             <button
               onClick={toggleDebug}
               className="p-2 bg-gray-800 bg-opacity-70 rounded-full text-white hover:bg-opacity-90"
-              title={isDebugMode ? "Show Original Image" : "Show Edge Detection"}
+              title={showDebug ? "Show Original Image" : "Show Edge Detection"}
             >
               <BugAntIcon className="h-5 w-5" />
             </button>
@@ -467,20 +477,6 @@ export default function AnalysisResult({
           <div className="w-full bg-blue-50 p-4 rounded-lg mb-4">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-medium text-blue-800">Fine-Tuning Controls</h3>
-              <div className="flex items-center space-x-2">
-                <select 
-                  className="text-sm font-medium text-gray-700 bg-white px-3 py-1 rounded-lg border"
-                  value={algorithm}
-                  onChange={(e) => setAlgorithm(e.target.value as 'Yellow' | 'Canny' | 'PSA')}
-                >
-                  <option value="Yellow">Yellow Detection</option>
-                  <option value="Canny">Canny Edge</option>
-                  <option value="PSA">PSA Template</option>
-                </select>
-                <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                  Current: {algorithm}
-                </div>
-              </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -494,11 +490,10 @@ export default function AnalysisResult({
                   <select 
                     className="w-full p-2 border rounded-lg bg-white"
                     value={adjustmentType}
-                    onChange={(e) => setAdjustmentType(e.target.value as 'outerEdges' | 'yellowBorder' | 'innerEdges')}
+                    onChange={(e) => setAdjustmentType(e.target.value as 'outer' | 'inner')}
                   >
-                    <option value="outerEdges">Outer Edges</option>
-                    <option value="yellowBorder">Yellow Border</option>
-                    <option value="innerEdges">Inner Edges</option>
+                    <option value="outer">Outer Edges</option>
+                    <option value="inner">Inner Edges</option>
                   </select>
                 </div>
 
@@ -550,8 +545,6 @@ export default function AnalysisResult({
                       Show magnifier when adjusting
                     </label>
                   </div>
-                  
-                  {/* Already moved algorithm selection to the top bar */}
                 </div>
               </div>
 
@@ -691,9 +684,8 @@ export default function AnalysisResult({
                 
                 <div className="text-center p-2 bg-gray-100 rounded-lg w-full">
                   <span className="text-sm font-medium">
-                    {adjustmentType === 'outerEdges' && 'Card Edges'}
-                    {adjustmentType === 'yellowBorder' && 'Yellow Border'}
-                    {adjustmentType === 'innerEdges' && 'Inner Edges'}
+                    {adjustmentType === 'outer' && 'Outer Edges'}
+                    {adjustmentType === 'inner' && 'Inner Edges'}
                   </span>
                 </div>
               </div>
@@ -705,11 +697,6 @@ export default function AnalysisResult({
         <div className="w-full bg-gray-100 p-4 rounded-lg mb-4 text-sm">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-base font-medium">Measurement Details</h3>
-            <div className="text-sm font-medium px-2 py-1 bg-white rounded border flex items-center space-x-2">
-              <span>Using</span> 
-              <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full">{algorithm}</span>
-              <span>Algorithm</span>
-            </div>
           </div>
           
           <div className="grid grid-cols-2 gap-4">
