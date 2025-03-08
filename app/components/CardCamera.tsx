@@ -18,20 +18,6 @@ export default function CardCamera({ onCapture, onClose }: CardCameraProps) {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
-  // Initialize the card detector
-  useEffect(() => {
-    const initializeDetector = async () => {
-      try {
-        await cardDetector.initialize();
-      } catch (error) {
-        console.error('Failed to initialize card detector:', error);
-        setCameraError('Failed to initialize card detection. Please try again later.');
-      }
-    };
-    
-    initializeDetector();
-  }, []);
-  
   const handleCameraReady = useCallback(() => {
     setIsCameraReady(true);
     setCameraError(null);

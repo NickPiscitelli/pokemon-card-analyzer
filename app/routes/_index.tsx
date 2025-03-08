@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { initTensorFlow } from '~/models/cardDetectionModel';
 import { CardAnalyzer } from '~/models/cardAnalysisModel'; 
 import CardCamera from '~/components/CardCamera';
 import CardUploader from '~/components/CardUploader';
@@ -31,24 +30,14 @@ export default function Index() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
-  const [initTimeout, setInitTimeout] = useState(false);
   
   // Reference to the CardAnalyzer instance for adjustments
   const cardAnalyzerRef = useRef<CardAnalyzer | null>(null);
   
-  // Initialize TensorFlow and load settings
+  // Initialize settings
   useEffect(() => {
     const initialize = async () => {
       try {
-        // Set a timeout to default to camera mode if initialization takes too long
-        const timeoutId = setTimeout(() => {
-          setInitTimeout(true);
-          setAnalysisMode('camera');
-        }, 5000); // Wait 5 seconds before defaulting to camera mode
-        
-        // Initialize TensorFlow.js
-        await initTensorFlow();
-        
         // Load user settings
         const userSettings = await getSettings();
         setSettings(userSettings);
@@ -60,14 +49,9 @@ export default function Index() {
             setShowTutorial(true);
           }
         }
-        
-        // Clear the timeout if initialization completes successfully
-        clearTimeout(timeoutId);
       } catch (error) {
         console.error('Initialization error:', error);
         setInitError('Failed to initialize the application. Please refresh the page and try again.');
-        // Default to camera mode on error
-        setAnalysisMode('camera');
       } finally {
         setIsInitializing(false);
       }
@@ -166,73 +150,123 @@ export default function Index() {
   };
   
   // Handle border adjustments
-  const handleAdjustBorder = async (type: 'outer' | 'inner', direction: 'left' | 'right' | 'top' | 'bottom', amount: number) => {
-    if (!cardAnalyzerRef.current || !analysisResult || !analysisResult.fullImageData) {
+  const handleAdjustBorder = async (
+    type: 'outer' | 'inner',
+    direction: 'left' | 'right' | 'top' | 'bottom',
+    amount: number,
+    algorithm?: 'Yellow' | 'Canny' | 'PSA'
+  ) => {
+    if (!cardAnalyzerRef.current || !analysisResult) {
       console.warn('Cannot adjust borders: analyzer not available or no analysis result');
       return;
     }
     
     try {
-      console.log('Adjusting borders:', { type, direction, amount });
+      // Use the algorithm from the UI if provided, or fall back to what's stored
+      let algoType = analysisResult.detectionMethod || 'Canny Edge Detection';
       
-      // Update measurements
-      const updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, amount);
-      console.log('Updated measurements:', updatedMeasurements);
+      // Check if this is just an algorithm change (amount is 0)
+      const isAlgorithmChange = amount === 0 && algorithm;
       
-      // Get current edges
-      const currentEdges = cardAnalyzerRef.current.getCurrentEdges();
-      console.log('Current edges:', currentEdges);
-      
-      if (!currentEdges) {
-        console.warn('Current edges not available');
-        return;
+      // Override with the UI-selected algorithm if provided
+      if (algorithm) {
+        if (algorithm === 'Yellow') {
+          algoType = 'Yellow Border Detection';
+        } else if (algorithm === 'Canny') {
+          algoType = 'Canny Edge Detection';
+        } else if (algorithm === 'PSA') {
+          algoType = 'PSA Template';
+        }
+        // Update the algorithm in the analyzer if needed
+        cardAnalyzerRef.current.detectionMethod = algoType;
       }
       
-      // Create a temporary canvas to hold the full image
-      const tempCanvas = document.createElement('canvas');
-      const tempCtx = tempCanvas.getContext('2d');
-      if (!tempCtx) throw new Error('Could not get canvas context');
+      let updatedMeasurements;
       
-      // Set canvas dimensions to match the image data
-      tempCanvas.width = analysisResult.fullImageData.width;
-      tempCanvas.height = analysisResult.fullImageData.height;
+      // If it's just an algorithm change, do a full reanalysis
+      if (isAlgorithmChange && analysisResult.imageUrl) {
+        // Create a new image to reanalyze
+        const img = new Image();
+        img.src = analysisResult.imageUrl;
+        
+        // We need to wait for the image to load before reanalyzing
+        const reanalysisPromise = new Promise<void>((resolve) => {
+          img.onload = async () => {
+            try {
+              if (!cardAnalyzerRef.current) return;
+              // Reanalyze the image with the new algorithm setting
+              const result = await cardAnalyzerRef.current.analyzeCard(img);
+              updatedMeasurements = result.measurements;
+              resolve();
+            } catch (error) {
+              console.error('Error reanalyzing with new algorithm:', error);
+              // Fall back to regular adjustment
+              if (cardAnalyzerRef.current) {
+                updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, 0);
+              }
+              resolve();
+            }
+          };
+          
+          img.onerror = () => {
+            console.error('Error loading image for reanalysis');
+            // Fall back to regular adjustment
+            if (cardAnalyzerRef.current) {
+              updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, 0);
+            }
+            resolve();
+          };
+        });
+        
+        // Wait for reanalysis to complete
+        await reanalysisPromise;
+      } else {
+        // Call the normal adjustment method if it's not an algorithm change
+        updatedMeasurements = cardAnalyzerRef.current.adjustMeasurements(type, direction, amount);
+      }
       
-      // Draw the full image data to the canvas
-      tempCtx.putImageData(analysisResult.fullImageData, 0, 0);
+      if (!updatedMeasurements) {
+        console.error('Failed to update measurements');
+        return;
+      }
+
+      // Get current edges for overlay
+      const edges = cardAnalyzerRef.current.getCurrentEdges();
       
-      // Create a new edge overlay using the canvas as the source with both edge types
-      const newEdgeOverlay = cardAnalyzerRef.current.generateEdgeOverlay(
-        tempCanvas,
-        currentEdges,
-        null
-      );
-      console.log('Generated new edge overlay:', { width: newEdgeOverlay.width, height: newEdgeOverlay.height });
+      // Create a new image for overlay generation
+      const img = new Image();
+      img.src = analysisResult.imageUrl || '';
       
-      // Convert the overlay to a data URL
-      const overlayCanvas = document.createElement('canvas');
-      overlayCanvas.width = newEdgeOverlay.width;
-      overlayCanvas.height = newEdgeOverlay.height;
-      const overlayCtx = overlayCanvas.getContext('2d');
-      if (!overlayCtx) throw new Error('Could not get canvas context');
-      
-      overlayCtx.putImageData(newEdgeOverlay, 0, 0);
-      const newOverlayUrl = overlayCanvas.toDataURL();
-      console.log('Generated new edge overlay URL');
-      
-      // Update the analysis result
-      setAnalysisResult(prevState => {
-        if (!prevState) return prevState;
-        console.log('Updating analysis result with new overlay');
-        return {
-          ...prevState,
-          measurements: updatedMeasurements,
-          edgeOverlayImageData: newEdgeOverlay,
-          edgeOverlayUrl: newOverlayUrl,
-          potentialGrade: cardAnalyzerRef.current!.getPotentialGrade(updatedMeasurements),
-          detectionMethod: cardAnalyzerRef.current!.detectionMethod
-        };
+      // Wait for image to load
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Failed to load image for overlay'));
       });
       
+      // Generate new edge overlay
+      const edgeOverlay = cardAnalyzerRef.current.generateEdgeOverlay(img, edges);
+      
+      // Convert to data URL
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        canvas.width = edgeOverlay.width;
+        canvas.height = edgeOverlay.height;
+        ctx.putImageData(edgeOverlay, 0, 0);
+        const edgeOverlayUrl = canvas.toDataURL('image/png');
+        
+        // Update the analysis result with new measurements and overlay
+        const updatedResult: CardAnalysisResult = {
+          ...analysisResult,
+          measurements: updatedMeasurements,
+          edgeOverlayImageData: edgeOverlay,
+          edgeOverlayUrl,
+          potentialGrade: cardAnalyzerRef.current.calculatePotentialGrade(updatedMeasurements),
+          detectionMethod: algoType
+        };
+        
+        setAnalysisResult(updatedResult);
+      }
     } catch (error) {
       console.error('Error adjusting borders:', error);
     }
@@ -324,7 +358,7 @@ export default function Index() {
       </header>
       
       <main className="container mx-auto p-4">
-        {isInitializing && !initTimeout ? (
+        {isInitializing ? (
           <div className="flex flex-col items-center justify-center min-h-[60vh]">
             <div className="animate-pulse text-6xl mb-4">🔍</div>
             <p className="text-xl font-semibold mb-2">Initializing...</p>
@@ -406,7 +440,7 @@ export default function Index() {
                 </div>
               ) : null}
               
-              {(activeTab === 'analyze' && analysisMode === 'camera') || (isInitializing && initTimeout) ? (
+              {(activeTab === 'analyze' && analysisMode === 'camera') ? (
                 <CardCamera
                   onCapture={handleCameraCapture}
                   onClose={() => setAnalysisMode(null)}

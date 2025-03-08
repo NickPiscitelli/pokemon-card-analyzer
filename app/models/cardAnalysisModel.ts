@@ -1,5 +1,3 @@
-import * as tf from '@tensorflow/tfjs';
-
 // Check if we're in a browser environment
 const isBrowser = typeof window !== 'undefined' && typeof window.document !== 'undefined';
 
@@ -669,7 +667,8 @@ export class CardAnalyzer {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
 
-  private calculatePotentialGrade(measurements: CardMeasurements): string {
+  // Public method to calculate potential grade
+  public calculatePotentialGrade(measurements: CardMeasurements): string {
     const { overallCentering } = measurements;
 
     if (overallCentering >= 97) return 'PSA 10';
@@ -806,11 +805,6 @@ export class CardAnalyzer {
       },
       slabEdges: null
     };
-  }
-
-  // Public method to calculate potential grade
-  public getPotentialGrade(measurements: CardMeasurements): string {
-    return this.calculatePotentialGrade(measurements);
   }
 
   // Public method to create edge overlay

@@ -358,6 +358,75 @@ export default function AnalysisResult({
     return {};
   };
   
+  const getZoomPosition = () => {
+    if (!focusedBorder) return { x: '50%', y: '50%' };
+    
+    // For each edge, we want to:
+    // - Center the view on the opposite axis (50%)
+    // - Position the edge at the corresponding side of the zoom window
+    switch (focusedBorder) {
+      case 'left':
+        return { x: '0', y: '50%' };
+      case 'right':
+        return { x: '100%', y: '50%' };
+      case 'top':
+        return { x: '50%', y: '25%' };  // Adjusted to show the top edge properly
+      case 'bottom':
+        return { x: '50%', y: '100%' };
+      default:
+        return { x: '50%', y: '50%' };
+    }
+  };
+  
+  // Get zoom window style
+  const getZoomWindowStyle = () => {
+    const { x, y } = getZoomPosition();
+    const baseStyle = {
+      position: 'absolute' as const,
+      width: '200px',
+      height: '200px',
+      opacity: 0.95,
+    };
+
+    // Adjust position based on focused border
+    if (focusedBorder === 'left') {
+      return {
+        ...baseStyle,
+        left: '10px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+      };
+    } else if (focusedBorder === 'right') {
+      return {
+        ...baseStyle,
+        right: '10px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+      };
+    } else if (focusedBorder === 'top') {
+      return {
+        ...baseStyle,
+        top: '10px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+      };
+    } else if (focusedBorder === 'bottom') {
+      return {
+        ...baseStyle,
+        bottom: '10px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+      };
+    }
+
+    // Default position (top-right corner)
+    return {
+      ...baseStyle,
+      right: '10px',
+      top: '10px',
+    };
+  };
+  
   return (
     <div className="flex flex-col lg:flex-row gap-6 w-full max-w-6xl mx-auto bg-white rounded-lg shadow-lg p-6">
       <div className="flex-1 flex flex-col items-center">
@@ -376,34 +445,47 @@ export default function AnalysisResult({
             {/* Zoom Overlay - shows when border adjustments are made */}
             {showZoomOverlay && (
               <div 
-                className="absolute bg-white border-4 border-black shadow-lg overflow-hidden transition-all duration-300 transform scale-100 z-10" 
-                style={{
-                  right: '10px',
-                  top: '10px',
-                  width: '200px',
-                  height: '200px',
-                  opacity: 0.95
-                }}
+                className="bg-white border-4 border-black shadow-lg overflow-hidden transition-all duration-300 transform scale-100 z-10" 
+                style={getZoomWindowStyle()}
               >
                 <div 
                   className="w-full h-full"
                   style={{
                     backgroundImage: `url(${edgeOverlayUrl || imageUrl})`,
-                    backgroundSize: '400%',
-                    backgroundPosition: focusedBorder === 'left' ? '15% 50%' : 
-                                      focusedBorder === 'right' ? '85% 50%' : 
-                                      focusedBorder === 'top' ? '50% 15%' : 
-                                      focusedBorder === 'bottom' ? '50% 85%' : '50% 50%',
+                    backgroundSize: '300%',
+                    backgroundPosition: getZoomPosition().x + ' ' + getZoomPosition().y,
+                    backgroundRepeat: 'no-repeat',
+                    transformOrigin: getZoomPosition().x + ' ' + getZoomPosition().y
                   }}
                 ></div>
                 <div className="absolute bottom-2 right-2 bg-black text-white text-xs px-2 py-0.5 rounded opacity-75">
                   3x
                 </div>
                 {/* Border indicator */}
-                {focusedBorder === 'left' && <div className="absolute left-0 top-0 bottom-0 w-2 bg-red-500 animate-pulse"></div>}
-                {focusedBorder === 'right' && <div className="absolute right-0 top-0 bottom-0 w-2 bg-red-500 animate-pulse"></div>}
-                {focusedBorder === 'top' && <div className="absolute top-0 left-0 right-0 h-2 bg-red-500 animate-pulse"></div>}
-                {focusedBorder === 'bottom' && <div className="absolute bottom-0 left-0 right-0 h-2 bg-red-500 animate-pulse"></div>}
+                {focusedBorder === 'left' && (
+                  <div 
+                    className="absolute top-0 bottom-0 w-0.5 bg-red-500 animate-pulse" 
+                    style={{ left: '33.333%' }}
+                  ></div>
+                )}
+                {focusedBorder === 'right' && (
+                  <div 
+                    className="absolute top-0 bottom-0 w-0.5 bg-red-500 animate-pulse" 
+                    style={{ left: '66.666%' }}
+                  ></div>
+                )}
+                {focusedBorder === 'top' && (
+                  <div 
+                    className="absolute left-0 right-0 h-0.5 bg-red-500 animate-pulse" 
+                    style={{ top: '50%' }}
+                  ></div>
+                )}
+                {focusedBorder === 'bottom' && (
+                  <div 
+                    className="absolute left-0 right-0 h-0.5 bg-red-500 animate-pulse" 
+                    style={{ top: '66.666%' }}
+                  ></div>
+                )}
                 
                 {/* Crosshair */}
                 <div className="absolute left-1/2 top-1/2 w-8 h-8 pointer-events-none opacity-60" style={{ transform: 'translate(-50%, -50%)' }}>
