@@ -88,6 +88,8 @@ export class CardAnalyzer {
   private cardEdges: { left: number; right: number; top: number; bottom: number; } | null = null;
   private innerEdges: { left: number; right: number; top: number; bottom: number; } | null = null;
   public detectionMethod: string = 'Canny Edge Detection';
+  private imageWidth: number | null = null;
+  private imageHeight: number | null = null;
 
   constructor() {
     if (isBrowser) {
@@ -249,6 +251,10 @@ export class CardAnalyzer {
       // Get dimensions
       const width = imageElement.width;
       const height = imageElement.height;
+      
+      // Store image dimensions for future calculations
+      this.imageWidth = width;
+      this.imageHeight = height;
 
       // Detect slab edges (optional, can be null)
       const slabEdges = this.detectSlabEdges(contrastData, width, height);
@@ -477,14 +483,22 @@ export class CardAnalyzer {
     top: number; 
     bottom: number; 
   }): CardMeasurements {
-    const width = edges.right - edges.left;
-    const height = edges.bottom - edges.top;
+    // Get the image dimensions (these should be stored when the image is processed)
+    const imageWidth = this.imageWidth || 0;
+    const imageHeight = this.imageHeight || 0;
 
-    // Calculate border measurements
+    // Calculate border measurements - distances from image edges to card edges
     const leftBorder = edges.left;
-    const rightBorder = width - edges.right;
+    const rightBorder = imageWidth > 0 ? imageWidth - edges.right : 0;
     const topBorder = edges.top;
-    const bottomBorder = height - edges.bottom;
+    const bottomBorder = imageHeight > 0 ? imageHeight - edges.bottom : 0;
+
+    // Log measurements for debugging
+    console.log("Border measurements:", { 
+      leftBorder, rightBorder, topBorder, bottomBorder,
+      imageWidth, imageHeight,
+      edges
+    });
 
     // Calculate centering percentages
     const horizontalDiff = Math.abs(leftBorder - rightBorder);
@@ -787,6 +801,11 @@ export class CardAnalyzer {
       }
     }
 
+    // Verify we have valid image dimensions
+    if (!this.imageWidth || !this.imageHeight) {
+      console.warn('Image dimensions not available for accurate measurement calculations');
+    }
+
     // Recalculate measurements based on outer edges
     this.lastMeasurements = this.measureCardBorders(this.cardEdges);
     return this.lastMeasurements;
@@ -817,6 +836,21 @@ export class CardAnalyzer {
     } | null = null,
     slabEdges: { left: number; right: number; top: number; bottom: number; } | null = null
   ): ImageData {
+    // Store image dimensions if not already stored
+    if (!this.imageWidth || !this.imageHeight) {
+      this.imageWidth = image.width;
+      this.imageHeight = image.height;
+    }
+    
+    // Continue with the existing logic...
+    if (edges === null && this.cardEdges) {
+      edges = {
+        cardEdges: this.cardEdges,
+        innerEdges: this.innerEdges,
+        slabEdges: slabEdges || null
+      };
+    }
+    
     const cardEdgesToUse = edges?.cardEdges || this.cardEdges;
     const innerEdgesToUse = edges?.innerEdges || this.innerEdges;
     const slabEdgesToUse = edges?.slabEdges || slabEdges;
@@ -826,6 +860,16 @@ export class CardAnalyzer {
     }
     
     return this.createEdgeOverlay(image, cardEdgesToUse, slabEdgesToUse, innerEdgesToUse);
+  }
+
+  // Public methods to get and set image dimensions
+  public setImageDimensions(width: number, height: number): void {
+    this.imageWidth = width;
+    this.imageHeight = height;
+  }
+  
+  public getImageDimensions(): { width: number | null; height: number | null } {
+    return { width: this.imageWidth, height: this.imageHeight };
   }
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CardAnalyzer } from '~/models/cardAnalysisModel'; 
+import { CardAnalyzer, CardMeasurements } from '~/models/cardAnalysisModel'; 
 import CardCamera from '~/components/CardCamera';
 import CardUploader from '~/components/CardUploader';
 import AnalysisResult from '~/components/AnalysisResult';
@@ -156,8 +156,8 @@ export default function Index() {
     amount: number,
     algorithm?: 'Yellow' | 'Canny' | 'PSA'
   ) => {
-    if (!cardAnalyzerRef.current || !analysisResult) {
-      console.warn('Cannot adjust borders: analyzer not available or no analysis result');
+    if (!cardAnalyzerRef.current || !analysisResult || !analysisResult.imageUrl) {
+      console.warn('Cannot adjust borders: analyzer not available, no analysis result, or no image URL');
       return;
     }
     
@@ -181,10 +181,30 @@ export default function Index() {
         cardAnalyzerRef.current.detectionMethod = algoType;
       }
       
-      let updatedMeasurements;
+      // Load image to get dimensions (if not already set)
+      const loadImagePromise = new Promise<void>((resolve) => {
+        const img = new Image();
+        img.src = analysisResult.imageUrl!;
+        img.onload = () => {
+          // Ensure the analyzer has the correct image dimensions
+          cardAnalyzerRef.current!.setImageDimensions(img.width, img.height);
+          resolve();
+        };
+        
+        img.onerror = () => {
+          console.error('Error loading image for dimensions');
+          resolve();
+        };
+      });
+      
+      // Wait for the image to load to ensure dimensions are set
+      await loadImagePromise;
+      
+      // Initialize with current measurements
+      let updatedMeasurements: CardMeasurements = analysisResult.measurements;
       
       // If it's just an algorithm change, do a full reanalysis
-      if (isAlgorithmChange && analysisResult.imageUrl) {
+      if (isAlgorithmChange) {
         // Create a new image to reanalyze
         const img = new Image();
         img.src = analysisResult.imageUrl;
@@ -235,38 +255,50 @@ export default function Index() {
       
       // Create a new image for overlay generation
       const img = new Image();
-      img.src = analysisResult.imageUrl || '';
+      img.src = analysisResult.imageUrl;
       
-      // Wait for image to load
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Failed to load image for overlay'));
-      });
-      
-      // Generate new edge overlay
-      const edgeOverlay = cardAnalyzerRef.current.generateEdgeOverlay(img, edges);
-      
-      // Convert to data URL
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        canvas.width = edgeOverlay.width;
-        canvas.height = edgeOverlay.height;
-        ctx.putImageData(edgeOverlay, 0, 0);
-        const edgeOverlayUrl = canvas.toDataURL('image/png');
-        
-        // Update the analysis result with new measurements and overlay
-        const updatedResult: CardAnalysisResult = {
-          ...analysisResult,
-          measurements: updatedMeasurements,
-          edgeOverlayImageData: edgeOverlay,
-          edgeOverlayUrl,
-          potentialGrade: cardAnalyzerRef.current.calculatePotentialGrade(updatedMeasurements),
-          detectionMethod: algoType
+      await new Promise<void>((resolve) => {
+        img.onload = async () => {
+          if (!cardAnalyzerRef.current) return;
+          
+          // Generate new overlay
+          const overlayData = cardAnalyzerRef.current.generateEdgeOverlay(img);
+          
+          // Convert overlay data to URL
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            console.error('Failed to get canvas context');
+            return;
+          }
+          
+          canvas.width = overlayData.width;
+          canvas.height = overlayData.height;
+          ctx.putImageData(overlayData, 0, 0);
+          const overlayUrl = canvas.toDataURL('image/png');
+          
+          // Update the analysis result with new measurements and overlay
+          setAnalysisResult(prev => {
+            if (!prev) return prev;
+            if (!cardAnalyzerRef.current) return prev;
+            return {
+              ...prev,
+              measurements: updatedMeasurements,
+              edgeOverlayUrl: overlayUrl,
+              detectionMethod: algoType,
+              potentialGrade: cardAnalyzerRef.current.calculatePotentialGrade(updatedMeasurements)
+            };
+          });
+          
+          resolve();
         };
         
-        setAnalysisResult(updatedResult);
-      }
+        img.onerror = () => {
+          console.error('Error loading image for overlay generation');
+          resolve();
+        };
+      });
+      
     } catch (error) {
       console.error('Error adjusting borders:', error);
     }
