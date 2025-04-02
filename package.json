@@ -1,6 +1,7 @@
 {
   "name": "pokemon-card-analyzer",
   "private": true,
+  "homepage": "https://nickpiscitelli.github.io/pokemon-card-analyzer",
   "sideEffects": false,
   "type": "module",
   "description": "A web-based application that analyzes Pokemon trading card centering to predict potential grading scores.",
