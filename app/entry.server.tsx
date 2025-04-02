@@ -52,6 +52,7 @@ function handleBotRequest(
         context={remixContext}
         url={request.url}
         abortDelay={ABORT_DELAY}
+        basename="/pokemon-card-analyzer/"
       />,
       {
         onAllReady() {
@@ -102,6 +103,7 @@ function handleBrowserRequest(
         context={remixContext}
         url={request.url}
         abortDelay={ABORT_DELAY}
+        basename="/pokemon-card-analyzer/"
       />,
       {
         onShellReady() {

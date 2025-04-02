@@ -9,8 +9,10 @@ declare module "@remix-run/node" {
 }
 
 export default defineConfig({
+  base: "/pokemon-card-analyzer/",
   plugins: [
     remix({
+      basename: '/pokemon-card-analyzer/',
       future: {
         v3_fetcherPersist: true,
         v3_relativeSplatPath: true,
