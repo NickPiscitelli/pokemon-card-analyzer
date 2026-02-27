@@ -69,6 +69,19 @@ export interface CardMeasurements {
   overallCentering: number; // 0-100% (100 being perfect)
 }
 
+export interface GraderPrediction {
+  company: 'PSA' | 'BGS' | 'CGC';
+  grade: string;
+  label: string;
+  meetsThreshold: boolean;
+}
+
+export interface MultiGraderPredictions {
+  psa: GraderPrediction;
+  bgs: GraderPrediction;
+  cgc: GraderPrediction;
+}
+
 export interface CardAnalysisResult {
   measurements: CardMeasurements;
   imageUrl?: string;
@@ -77,6 +90,7 @@ export interface CardAnalysisResult {
   edgeOverlayImageData: ImageData;
   edgeOverlayUrl: string;
   potentialGrade: string;
+  graderPredictions: MultiGraderPredictions;
   analyzer?: CardAnalyzer;
   detectionMethod?: string;
 }
@@ -294,6 +308,7 @@ export class CardAnalyzer {
         edgeOverlayImageData: overlay,
         edgeOverlayUrl: this.createDataURL(overlay),
         potentialGrade: this.calculatePotentialGrade(this.lastMeasurements),
+        graderPredictions: this.calculateMultiGraderPredictions(this.lastMeasurements),
         detectionMethod: this.detectionMethod
       };
     } catch (error) {
@@ -582,100 +597,112 @@ export class CardAnalyzer {
     if (this.lastMeasurements) {
       const { leftBorder, rightBorder, topBorder, bottomBorder, horizontalCentering, verticalCentering } = this.lastMeasurements;
 
-      // Draw center lines
-      ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';  // Semi-transparent green
-      ctx.lineWidth = 1;
+      // Calculate distribution diffs for color coding
+      const hTotal = leftBorder + rightBorder;
+      const vTotal = topBorder + bottomBorder;
+      const hDiffPct = hTotal > 0 ? Math.abs(leftBorder - rightBorder) / hTotal * 100 : 0;
+      const vDiffPct = vTotal > 0 ? Math.abs(topBorder - bottomBorder) / vTotal * 100 : 0;
+
+      // Color coding: green <5%, yellow 5-10%, red >10%
+      const getColor = (diffPct: number) => {
+        if (diffPct < 5) return { fill: 'rgba(34, 197, 94, 0.9)', stroke: '#16a34a' };
+        if (diffPct < 10) return { fill: 'rgba(250, 204, 21, 0.9)', stroke: '#ca8a04' };
+        return { fill: 'rgba(239, 68, 68, 0.9)', stroke: '#dc2626' };
+      };
+
+      const hColor = getColor(hDiffPct);
+      const vColor = getColor(vDiffPct);
 
       // Calculate center points
       const centerX = cardEdges.left + cardWidth / 2;
       const centerY = cardEdges.top + cardHeight / 2;
 
-      // Vertical center line
-      ctx.beginPath();
-      ctx.moveTo(centerX, cardEdges.top - 20);
-      ctx.lineTo(centerX, cardEdges.bottom + 20);
-      ctx.stroke();
+      // Draw border measurement lines (colored arrows from image edge to card edge)
+      const drawArrowLine = (x1: number, y1: number, x2: number, y2: number, color: string) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
 
-      // Horizontal center line
-      ctx.beginPath();
-      ctx.moveTo(cardEdges.left - 20, centerY);
-      ctx.lineTo(cardEdges.right + 20, centerY);
-      ctx.stroke();
+        // Arrowhead
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const headLen = 8;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+      };
 
-      // Reset line dash
+      // Left border arrow (from left image edge to card left edge)
+      drawArrowLine(0, centerY, cardEdges.left, centerY, hColor.stroke);
+      // Right border arrow (from right image edge to card right edge)
+      drawArrowLine(canvas.width, centerY, cardEdges.right, centerY, hColor.stroke);
+      // Top border arrow
+      drawArrowLine(centerX, 0, centerX, cardEdges.top, vColor.stroke);
+      // Bottom border arrow
+      drawArrowLine(centerX, canvas.height, centerX, cardEdges.bottom, vColor.stroke);
+
+      // Draw center lines
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(centerX, cardEdges.top);
+      ctx.lineTo(centerX, cardEdges.bottom);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cardEdges.left, centerY);
+      ctx.lineTo(cardEdges.right, centerY);
+      ctx.stroke();
       ctx.setLineDash([]);
 
-      // Add measurements text
-      ctx.font = '16px Arial';
-      ctx.fillStyle = 'white';
-      ctx.strokeStyle = 'black';
-      ctx.lineWidth = 3;
-
-      // Function to draw outlined text
-      const drawOutlinedText = (text: string, x: number, y: number) => {
+      // Helper for outlined text
+      const drawOutlinedText = (text: string, x: number, y: number, color?: string) => {
+        ctx.font = '14px Arial';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'black';
+        ctx.fillStyle = color || 'white';
         ctx.strokeText(text, x, y);
         ctx.fillText(text, x, y);
       };
 
-      // Create background for measurements
-      const padding = 10;
-      const metrics = ctx.measureText(`H: ${horizontalCentering.toFixed(1)}% V: ${verticalCentering.toFixed(1)}%`);
-      const textWidth = metrics.width + padding * 2;
-      const textHeight = 70;
+      // Border measurement labels
+      drawOutlinedText(`${leftBorder.toFixed(1)}px`, Math.max(5, cardEdges.left / 2 - 20), centerY - 8, hColor.fill);
+      drawOutlinedText(`${rightBorder.toFixed(1)}px`, cardEdges.right + (canvas.width - cardEdges.right) / 2 - 20, centerY - 8, hColor.fill);
+      drawOutlinedText(`${topBorder.toFixed(1)}px`, centerX - 25, Math.max(15, cardEdges.top / 2 + 5), vColor.fill);
+      drawOutlinedText(`${bottomBorder.toFixed(1)}px`, centerX - 25, cardEdges.bottom + (canvas.height - cardEdges.bottom) / 2 + 5, vColor.fill);
 
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-      ctx.fillRect(
-        centerX - textWidth / 2,
-        cardEdges.bottom + padding,
-        textWidth,
-        textHeight
-      );
+      // Distribution diff badges
+      const hDistMax = hTotal > 0 ? Math.round(Math.max(leftBorder, rightBorder) / hTotal * 100) : 50;
+      const hDistMin = 100 - hDistMax;
+      const vDistMax = vTotal > 0 ? Math.round(Math.max(topBorder, bottomBorder) / vTotal * 100) : 50;
+      const vDistMin = 100 - vDistMax;
 
-      // Draw measurements
+      // Bottom info bar
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      const barY = cardEdges.bottom + 12;
+      const barH = 52;
+      ctx.fillRect(cardEdges.left, barY, cardWidth, barH);
+
+      ctx.font = 'bold 13px Arial';
+      ctx.lineWidth = 0;
+      const col1 = cardEdges.left + 10;
+      const col2 = cardEdges.left + cardWidth / 2 + 10;
+
+      ctx.fillStyle = hColor.fill;
+      ctx.fillText(`L/R: ${hDistMin}/${hDistMax} (${hDiffPct.toFixed(1)}% diff)`, col1, barY + 18);
+      ctx.fillStyle = vColor.fill;
+      ctx.fillText(`T/B: ${vDistMin}/${vDistMax} (${vDiffPct.toFixed(1)}% diff)`, col2, barY + 18);
+
       ctx.fillStyle = 'white';
-      drawOutlinedText(
-        `H: ${horizontalCentering.toFixed(1)}%`,
-        centerX - textWidth / 2 + padding,
-        cardEdges.bottom + padding + 20
-      );
-      drawOutlinedText(
-        `V: ${verticalCentering.toFixed(1)}%`,
-        centerX - textWidth / 2 + padding,
-        cardEdges.bottom + padding + 40
-      );
-      drawOutlinedText(
-        `L: ${leftBorder.toFixed(1)} R: ${rightBorder.toFixed(1)}`,
-        centerX - textWidth / 2 + padding,
-        cardEdges.bottom + padding + 60
-      );
-
-      // Add border measurements on each side
-      ctx.font = '14px Arial';
-      // Left border
-      drawOutlinedText(
-        `${leftBorder.toFixed(1)}px`,
-        cardEdges.left + 5,
-        centerY - 10
-      );
-      // Right border
-      drawOutlinedText(
-        `${rightBorder.toFixed(1)}px`,
-        cardEdges.right - 50,
-        centerY - 10
-      );
-      // Top border
-      drawOutlinedText(
-        `${topBorder.toFixed(1)}px`,
-        centerX - 25,
-        cardEdges.top + 20
-      );
-      // Bottom border
-      drawOutlinedText(
-        `${bottomBorder.toFixed(1)}px`,
-        centerX - 25,
-        cardEdges.bottom - 10
-      );
+      ctx.fillText(`H: ${horizontalCentering.toFixed(1)}%`, col1, barY + 40);
+      ctx.fillText(`V: ${verticalCentering.toFixed(1)}%`, col2, barY + 40);
     }
 
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -683,14 +710,75 @@ export class CardAnalyzer {
 
   // Public method to calculate potential grade
   public calculatePotentialGrade(measurements: CardMeasurements): string {
-    const { overallCentering } = measurements;
+    const predictions = this.calculateMultiGraderPredictions(measurements);
+    return predictions.psa.grade;
+  }
 
-    if (overallCentering >= 97) return 'PSA 10';
-    if (overallCentering >= 90) return 'PSA 9';
-    if (overallCentering >= 80) return 'PSA 8';
-    if (overallCentering >= 70) return 'PSA 7';
-    if (overallCentering >= 60) return 'PSA 6';
-    return 'PSA 5 or lower';
+  // Calculate multi-grader predictions based on centering distribution
+  public calculateMultiGraderPredictions(measurements: CardMeasurements): MultiGraderPredictions {
+    const { leftBorder, rightBorder, topBorder, bottomBorder } = measurements;
+
+    // Calculate distribution percentages
+    const hTotal = leftBorder + rightBorder;
+    const vTotal = topBorder + bottomBorder;
+    const maxH = hTotal > 0 ? Math.max(leftBorder, rightBorder) / hTotal * 100 : 50;
+    const maxV = vTotal > 0 ? Math.max(topBorder, bottomBorder) / vTotal * 100 : 50;
+
+    // PSA: 10 requires <=55/45 on both axes
+    let psaGrade: string;
+    let psaLabel: string;
+    let psaMeets: boolean;
+    if (maxH <= 55 && maxV <= 55) {
+      psaGrade = 'PSA 10'; psaLabel = 'Gem Mint'; psaMeets = true;
+    } else if (maxH <= 60 && maxV <= 60) {
+      psaGrade = 'PSA 9'; psaLabel = 'Mint'; psaMeets = false;
+    } else if (maxH <= 65 && maxV <= 65) {
+      psaGrade = 'PSA 8'; psaLabel = 'NM-MT'; psaMeets = false;
+    } else if (maxH <= 70 && maxV <= 70) {
+      psaGrade = 'PSA 7'; psaLabel = 'Near Mint'; psaMeets = false;
+    } else if (maxH <= 75 && maxV <= 75) {
+      psaGrade = 'PSA 6'; psaLabel = 'EX-MT'; psaMeets = false;
+    } else {
+      psaGrade = 'PSA 5'; psaLabel = 'Excellent'; psaMeets = false;
+    }
+
+    // BGS: 10 requires <=50/50 (perfect), 9.5 requires <=55/45
+    let bgsGrade: string;
+    let bgsLabel: string;
+    let bgsMeets: boolean;
+    if (maxH <= 50.5 && maxV <= 50.5) {
+      bgsGrade = 'BGS 10'; bgsLabel = 'Black Label'; bgsMeets = true;
+    } else if (maxH <= 55 && maxV <= 55) {
+      bgsGrade = 'BGS 9.5'; bgsLabel = 'Gem Mint'; bgsMeets = true;
+    } else if (maxH <= 60 && maxV <= 60) {
+      bgsGrade = 'BGS 9'; bgsLabel = 'Mint'; bgsMeets = false;
+    } else if (maxH <= 65 && maxV <= 65) {
+      bgsGrade = 'BGS 8.5'; bgsLabel = 'NM-MT+'; bgsMeets = false;
+    } else {
+      bgsGrade = 'BGS 8'; bgsLabel = 'NM-MT'; bgsMeets = false;
+    }
+
+    // CGC: 10 requires <=55/45
+    let cgcGrade: string;
+    let cgcLabel: string;
+    let cgcMeets: boolean;
+    if (maxH <= 55 && maxV <= 55) {
+      cgcGrade = 'CGC 10'; cgcLabel = 'Pristine'; cgcMeets = true;
+    } else if (maxH <= 60 && maxV <= 60) {
+      cgcGrade = 'CGC 9.5'; cgcLabel = 'Gem Mint'; cgcMeets = false;
+    } else if (maxH <= 65 && maxV <= 65) {
+      cgcGrade = 'CGC 9'; cgcLabel = 'Mint'; cgcMeets = false;
+    } else if (maxH <= 70 && maxV <= 70) {
+      cgcGrade = 'CGC 8.5'; cgcLabel = 'NM-MT+'; cgcMeets = false;
+    } else {
+      cgcGrade = 'CGC 8'; cgcLabel = 'NM-MT'; cgcMeets = false;
+    }
+
+    return {
+      psa: { company: 'PSA', grade: psaGrade, label: psaLabel, meetsThreshold: psaMeets },
+      bgs: { company: 'BGS', grade: bgsGrade, label: bgsLabel, meetsThreshold: bgsMeets },
+      cgc: { company: 'CGC', grade: cgcGrade, label: cgcLabel, meetsThreshold: cgcMeets },
+    };
   }
 
   private extractCardRegion(image: HTMLImageElement | HTMLCanvasElement, edges: { 
@@ -740,21 +828,23 @@ export class CardAnalyzer {
 
   private createDummyResult(): CardAnalysisResult {
     const dummyImageData = new ImageData(1, 1);
+    const dummyMeasurements: CardMeasurements = {
+      leftBorder: 0,
+      rightBorder: 0,
+      topBorder: 0,
+      bottomBorder: 0,
+      horizontalCentering: 0,
+      verticalCentering: 0,
+      overallCentering: 0
+    };
     return {
-      measurements: {
-        leftBorder: 0,
-        rightBorder: 0,
-        topBorder: 0,
-        bottomBorder: 0,
-        horizontalCentering: 0,
-        verticalCentering: 0,
-        overallCentering: 0
-      },
+      measurements: dummyMeasurements,
       cardImageData: dummyImageData,
       fullImageData: dummyImageData,
       edgeOverlayImageData: dummyImageData,
       edgeOverlayUrl: '',
-      potentialGrade: 'N/A'
+      potentialGrade: 'N/A',
+      graderPredictions: this.calculateMultiGraderPredictions(dummyMeasurements)
     };
   }
 

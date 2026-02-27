@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CardMeasurements } from '~/models/cardAnalysisModel';
-import { 
-  ArrowDownTrayIcon, 
-  ArrowLeftIcon, 
-  ArrowPathIcon, 
-  BugAntIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
+import { CardMeasurements, MultiGraderPredictions, CardAnalyzer } from '~/models/cardAnalysisModel';
+import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ClipboardIcon,
+  CheckIcon,
   ChevronUpIcon,
   ChevronDownIcon,
-  MagnifyingGlassIcon
 } from '@heroicons/react/24/solid';
 
 interface AnalysisResultProps {
@@ -17,6 +14,7 @@ interface AnalysisResultProps {
   edgeOverlayUrl?: string;
   measurements: CardMeasurements;
   potentialGrade: string;
+  graderPredictions?: MultiGraderPredictions;
   onBack: () => void;
   onReset: () => void;
   onAdjustBorder?: (
@@ -27,351 +25,291 @@ interface AnalysisResultProps {
   onResetAdjustments?: () => void;
 }
 
-export default function AnalysisResult({ 
-  imageUrl, 
-  edgeOverlayUrl, 
-  measurements, 
+export default function AnalysisResult({
+  imageUrl,
+  edgeOverlayUrl,
+  measurements,
   potentialGrade,
+  graderPredictions,
   onBack,
   onReset,
   onAdjustBorder,
   onResetAdjustments
 }: AnalysisResultProps) {
-  const [showAdjustmentControls, setShowAdjustmentControls] = useState(true);
+  const [showAdjustmentControls, setShowAdjustmentControls] = useState(false);
   const [adjustmentType, setAdjustmentType] = useState<'outer' | 'inner'>('outer');
   const [focusedBorder, setFocusedBorder] = useState<'left' | 'right' | 'top' | 'bottom' | null>(null);
   const [zoomFocus, setZoomFocus] = useState(true);
   const [showZoomOverlay, setShowZoomOverlay] = useState(false);
-  const [zoomPosition, setZoomPosition] = useState({ x: 0, y: 0 });
-  const zoomOverlayTimerRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // Effect to handle algorithm changes
-  useEffect(() => {
-    if (onAdjustBorder && focusedBorder) {
-      onAdjustBorder(adjustmentType, focusedBorder, 0);
-    }
-  }, [onAdjustBorder, focusedBorder, adjustmentType]);
-  
-  // Add effect to log URL changes
-  useEffect(() => {
-    console.log('AnalysisResult received new overlay URL:', edgeOverlayUrl);
-  }, [edgeOverlayUrl]);
-  
-  // Add effect to log measurement changes and distribution calculations
-  useEffect(() => {
-    console.log('AnalysisResult received new measurements:', measurements);
-    const { topBorder, bottomBorder } = measurements;
-    console.log('Top border:', topBorder, 'Bottom border:', bottomBorder);
-    
-    // Calculate distribution percentages for logging
-    const total = topBorder + bottomBorder;
-    const topPercentCalc = total > 0 ? (topBorder / total) * 100 : 50;
-    const bottomPercentCalc = total > 0 ? (bottomBorder / total) * 100 : 50;
-    console.log('Top/Bottom distribution:', topPercentCalc.toFixed(1), bottomPercentCalc.toFixed(1));
-    console.log('Vertical distribution formatted:', `${Math.round(topPercentCalc)}/${Math.round(bottomPercentCalc)}`);
-  }, [measurements]);
-  
-  const { 
-    leftBorder, 
-    rightBorder, 
-    topBorder, 
-    bottomBorder,
-    horizontalCentering,
-    verticalCentering,
-    overallCentering
+  const [copied, setCopied] = useState(false);
+
+  const {
+    leftBorder, rightBorder, topBorder, bottomBorder,
+    horizontalCentering, verticalCentering, overallCentering
   } = measurements;
-  
-  // Determine color based on centering score
-  const getCenteringColor = (score: number) => {
-    if (score >= 90) return 'text-green-600';
-    if (score >= 75) return 'text-yellow-600';
-    return 'text-red-600';
+
+  // Distribution calculations
+  const calcDist = (a: number, b: number): [number, number] => {
+    const total = a + b;
+    if (total <= 0) return [50, 50];
+    return [(a / total) * 100, (b / total) * 100];
   };
-  
-  // Get progress bar color based on score
+
+  const [leftPct, rightPct] = calcDist(leftBorder, rightBorder);
+  const [topPct, bottomPct] = calcDist(topBorder, bottomBorder);
+
+  const hDiffPct = Math.abs(leftPct - rightPct);
+  const vDiffPct = Math.abs(topPct - bottomPct);
+
+  const formatDist = (a: number, b: number) => `${Math.round(a)}/${Math.round(b)}`;
+
+  // Color coding for centering quality
+  const getDiffColor = (diffPct: number) => {
+    if (diffPct < 10) return { text: 'text-green-600 dark:text-green-400', bg: 'bg-green-100 dark:bg-green-900/30', label: 'Excellent' };
+    if (diffPct < 20) return { text: 'text-yellow-600 dark:text-yellow-400', bg: 'bg-yellow-100 dark:bg-yellow-900/30', label: 'Borderline' };
+    return { text: 'text-red-600 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-900/30', label: 'Poor' };
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 90) return 'text-green-600 dark:text-green-400';
+    if (score >= 75) return 'text-yellow-600 dark:text-yellow-400';
+    return 'text-red-600 dark:text-red-400';
+  };
+
   const getProgressColor = (score: number) => {
-    if (score >= 90) return 'bg-green-600';
-    if (score >= 75) return 'bg-yellow-600';
-    return 'bg-red-600';
+    if (score >= 90) return 'bg-green-500';
+    if (score >= 75) return 'bg-yellow-500';
+    return 'bg-red-500';
   };
-  
-  // Format a number with 1 decimal place
-  const formatNumber = (num: number) => {
-    return num.toFixed(1);
+
+  // Grader card styling
+  const getGraderStyle = (meetsThreshold: boolean) => {
+    if (meetsThreshold) return 'border-green-500 bg-green-50 dark:bg-green-900/20';
+    return 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50';
   };
-  
-  // Format percentages to 1 decimal place
-  const formatPercentage = (value: number) => `${value.toFixed(1)}%`;
-  
-  // Calculate the border offset ratio
-  const horizontalRatio = leftBorder > 0 && rightBorder > 0 
-    ? Math.max(leftBorder, rightBorder) / Math.min(leftBorder, rightBorder) 
-    : 0;
-  
-  const verticalRatio = topBorder > 0 && bottomBorder > 0 
-    ? Math.max(topBorder, bottomBorder) / Math.min(topBorder, bottomBorder) 
-    : 0;
-    
-  // Calculate the distribution percentages for opposing sides
-  const calculateDistribution = (side1: number, side2: number): [number, number] => {
-    const total = side1 + side2;
-    if (total <= 0) return [50, 50]; // Default to 50/50 if no measurements
-    
-    const side1Percent = (side1 / total) * 100;
-    const side2Percent = (side2 / total) * 100;
-    return [side1Percent, side2Percent];
+
+  const getGraderGradeColor = (meetsThreshold: boolean) => {
+    if (meetsThreshold) return 'text-green-600 dark:text-green-400';
+    return 'text-gray-700 dark:text-gray-300';
   };
-  
-  const [leftPercent, rightPercent] = calculateDistribution(leftBorder, rightBorder);
-  const [topPercent, bottomPercent] = calculateDistribution(topBorder, bottomBorder);
-  
-  // Format distribution as text (e.g., "55/45")
-  const formatDistribution = (percent1: number, percent2: number) => 
-    `${Math.round(percent1)}/${Math.round(percent2)}`;
-  
-  const horizontalDistribution = formatDistribution(leftPercent, rightPercent);
-  const verticalDistribution = formatDistribution(topPercent, bottomPercent);
-  
-  // Format offset ratio
-  const formatRatio = (value: number) => value > 0 ? `${value.toFixed(2)}:1` : 'N/A';
-  
-  // Determine centering grade based on overall centering percentage
-  let centeringGradeLabel = 'Poor';
-  let centeringColor = 'text-red-600';
-  
-  if (overallCentering >= 97) {
-    centeringGradeLabel = 'Perfect';
-    centeringColor = 'text-green-600';
-  } else if (overallCentering >= 90) {
-    centeringGradeLabel = 'Excellent';
-    centeringColor = 'text-green-500';
-  } else if (overallCentering >= 80) {
-    centeringGradeLabel = 'Very Good';
-    centeringColor = 'text-green-400';
-  } else if (overallCentering >= 70) {
-    centeringGradeLabel = 'Good';
-    centeringColor = 'text-yellow-500';
-  } else if (overallCentering >= 60) {
-    centeringGradeLabel = 'Fair';
-    centeringColor = 'text-orange-500';
-  }
-  
-  // Toggle adjustment controls
-  const toggleAdjustmentControls = () => {
-    setShowAdjustmentControls(!showAdjustmentControls);
-  };
-  
+
   // Handle border adjustment
-  const handleAdjustBorder = (
-    type: 'outer' | 'inner',
-    direction: 'left' | 'right' | 'top' | 'bottom', 
-    amount: number
-  ) => {
+  const handleAdjust = (direction: 'left' | 'right' | 'top' | 'bottom', amount: number) => {
     if (onAdjustBorder) {
-      // Use 0.5px as the minimum adjustment size for finest control
-      const adjustmentAmount = amount * 0.5;
-      
-      // Set the focused border to the direction being adjusted
+      onAdjustBorder(adjustmentType, direction, amount * 0.5);
       setFocusedBorder(direction);
-      
-      // Call the parent's onAdjustBorder
-      onAdjustBorder(type, direction, adjustmentAmount);
-      
-      // If zoom focus is enabled, show the zoom overlay
       if (zoomFocus) {
         setShowZoomOverlay(true);
-        
-        // Keep the zoom overlay visible for 10 seconds after each adjustment
-        setTimeout(() => {
-          setShowZoomOverlay(false);
-        }, 10000);
+        setTimeout(() => setShowZoomOverlay(false), 10000);
       }
     }
   };
-  
+
   const getZoomPosition = () => {
-    if (!focusedBorder) return { x: '50%', y: '50%' };
-    
-    // For each edge, we want to:
-    // - Center the view on the opposite axis (50%)
-    // - Position the edge at the corresponding side of the zoom window
     switch (focusedBorder) {
-      case 'left':
-        return { x: '0', y: '50%' };
-      case 'right':
-        return { x: '100%', y: '50%' };
-      case 'top':
-        return { x: '50%', y: '25%' };  // Adjusted to show the top edge properly
-      case 'bottom':
-        return { x: '50%', y: '100%' };
-      default:
-        return { x: '50%', y: '50%' };
+      case 'left': return { x: '0', y: '50%' };
+      case 'right': return { x: '100%', y: '50%' };
+      case 'top': return { x: '50%', y: '25%' };
+      case 'bottom': return { x: '50%', y: '100%' };
+      default: return { x: '50%', y: '50%' };
     }
   };
-  
-  // Get zoom window style
-  const getZoomWindowStyle = () => {
-    const { x, y } = getZoomPosition();
-    const baseStyle = {
-      position: 'absolute' as const,
-      width: '200px',
-      height: '200px',
-      opacity: 0.95,
-    };
 
-    // Adjust position based on focused border
-    if (focusedBorder === 'left') {
-      return {
-        ...baseStyle,
-        left: '10px',
-        top: '50%',
-        transform: 'translateY(-50%)',
-      };
-    } else if (focusedBorder === 'right') {
-      return {
-        ...baseStyle,
-        right: '10px',
-        top: '50%',
-        transform: 'translateY(-50%)',
-      };
-    } else if (focusedBorder === 'top') {
-      return {
-        ...baseStyle,
-        top: '10px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-      };
-    } else if (focusedBorder === 'bottom') {
-      return {
-        ...baseStyle,
-        bottom: '10px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-      };
-    }
-
-    // Default position (top-right corner)
-    return {
-      ...baseStyle,
-      right: '10px',
-      top: '10px',
-    };
+  const getZoomStyle = () => {
+    const base = { position: 'absolute' as const, width: '180px', height: '180px', opacity: 0.95 };
+    if (focusedBorder === 'left') return { ...base, left: '8px', top: '50%', transform: 'translateY(-50%)' };
+    if (focusedBorder === 'right') return { ...base, right: '8px', top: '50%', transform: 'translateY(-50%)' };
+    if (focusedBorder === 'top') return { ...base, top: '8px', left: '50%', transform: 'translateX(-50%)' };
+    if (focusedBorder === 'bottom') return { ...base, bottom: '8px', left: '50%', transform: 'translateX(-50%)' };
+    return { ...base, right: '8px', top: '8px' };
   };
-  
-  // Download the analysis as an image
+
+  // Copy centering data to clipboard
+  const copyToClipboard = async () => {
+    const data = {
+      measurements: {
+        leftBorder: +leftBorder.toFixed(1),
+        rightBorder: +rightBorder.toFixed(1),
+        topBorder: +topBorder.toFixed(1),
+        bottomBorder: +bottomBorder.toFixed(1),
+      },
+      centering: {
+        horizontal: +horizontalCentering.toFixed(1),
+        vertical: +verticalCentering.toFixed(1),
+        overall: +overallCentering.toFixed(1),
+      },
+      distribution: {
+        leftRight: formatDist(leftPct, rightPct),
+        topBottom: formatDist(topPct, bottomPct),
+      },
+      predictions: graderPredictions ? {
+        PSA: graderPredictions.psa.grade,
+        BGS: graderPredictions.bgs.grade,
+        CGC: graderPredictions.cgc.grade,
+      } : { grade: potentialGrade },
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+      const textArea = document.createElement('textarea');
+      textArea.value = JSON.stringify(data, null, 2);
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // Download analysis as image
   const downloadAnalysis = () => {
-    // Create a canvas element
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    
-    if (!ctx) {
-      console.error('Failed to get canvas context');
-      return;
-    }
-    
-    // Set canvas dimensions
+    if (!ctx) return;
+
     canvas.width = 1200;
-    canvas.height = 1600;
-    
-    // Draw background
-    ctx.fillStyle = '#f8fafc'; // Tailwind slate-50
+    canvas.height = 1800;
+
+    // Background
+    ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Load and draw the card image
+
+    // Header gradient
+    const headerGrad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    headerGrad.addColorStop(0, '#2563eb');
+    headerGrad.addColorStop(1, '#7c3aed');
+    ctx.fillStyle = headerGrad;
+    ctx.fillRect(0, 0, canvas.width, 80);
+
+    ctx.font = 'bold 32px Arial';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.fillText('Pokemon Card Centering Analysis', canvas.width / 2, 52);
+
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.src = imageUrl;
-    
+    img.src = edgeOverlayUrl || imageUrl;
+
     img.onload = () => {
-      // Draw the card image
-      const imgWidth = 600;
-      const imgHeight = (img.height / img.width) * imgWidth;
-      const imgX = (canvas.width - imgWidth) / 2;
-      const imgY = 100;
-      
-      ctx.drawImage(img, imgX, imgY, imgWidth, imgHeight);
-      
-      // Draw title
-      ctx.font = 'bold 48px Arial';
-      ctx.fillStyle = '#0f172a'; // Tailwind slate-900
-      ctx.textAlign = 'center';
-      ctx.fillText('Pokémon Card Centering Analysis', canvas.width / 2, 60);
-      
-      // Draw measurements
-      ctx.font = 'bold 36px Arial';
-      ctx.fillText('Border Measurements', canvas.width / 2, imgY + imgHeight + 60);
-      
-      // Draw measurements table
-      const tableY = imgY + imgHeight + 100;
-      const tableWidth = 800;
-      const tableX = (canvas.width - tableWidth) / 2;
-      
-      ctx.font = '28px Arial';
+      // Card image
+      const imgW = 500;
+      const imgH = (img.height / img.width) * imgW;
+      const imgX = (canvas.width - imgW) / 2;
+      const imgY = 110;
+
+      // Card shadow
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 10;
+      ctx.drawImage(img, imgX, imgY, imgW, imgH);
+      ctx.shadowBlur = 0;
+
+      const startY = imgY + imgH + 40;
+
+      // Section: Centering Scores
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(50, startY, canvas.width - 100, 140);
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(50, startY, canvas.width - 100, 140);
+
+      ctx.font = 'bold 24px Arial';
+      ctx.fillStyle = '#94a3b8';
       ctx.textAlign = 'left';
-      
-      // Draw the measurements
-      ctx.fillText(`Left Border: ${formatNumber(leftBorder)}px`, tableX, tableY);
-      ctx.fillText(`Right Border: ${formatNumber(rightBorder)}px`, tableX, tableY + 40);
-      ctx.fillText(`Top Border: ${formatNumber(topBorder)}px`, tableX, tableY + 80);
-      ctx.fillText(`Bottom Border: ${formatNumber(bottomBorder)}px`, tableX, tableY + 120);
-      
-      // Draw centering scores
-      ctx.font = 'bold 36px Arial';
+      ctx.fillText('CENTERING SCORES', 80, startY + 35);
+
+      // Score bars
+      const barY = startY + 55;
+      const barW = 300;
+
+      // Horizontal
+      ctx.font = '18px Arial';
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(`Horizontal: ${horizontalCentering.toFixed(1)}%`, 80, barY + 15);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(80, barY + 22, barW, 12);
+      ctx.fillStyle = horizontalCentering >= 90 ? '#22c55e' : horizontalCentering >= 75 ? '#eab308' : '#ef4444';
+      ctx.fillRect(80, barY + 22, barW * (horizontalCentering / 100), 12);
+
+      // Vertical
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(`Vertical: ${verticalCentering.toFixed(1)}%`, 500, barY + 15);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(500, barY + 22, barW, 12);
+      ctx.fillStyle = verticalCentering >= 90 ? '#22c55e' : verticalCentering >= 75 ? '#eab308' : '#ef4444';
+      ctx.fillRect(500, barY + 22, barW * (verticalCentering / 100), 12);
+
+      // Overall
+      ctx.font = 'bold 20px Arial';
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(`Overall: ${overallCentering.toFixed(1)}%`, 920, barY + 15);
+
+      // Section: Distribution & Measurements
+      const secY = startY + 160;
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(50, secY, canvas.width - 100, 120);
+      ctx.strokeStyle = '#334155';
+      ctx.strokeRect(50, secY, canvas.width - 100, 120);
+
+      ctx.font = 'bold 24px Arial';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('DISTRIBUTION', 80, secY + 35);
+
+      ctx.font = '20px Arial';
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(`L/R: ${formatDist(leftPct, rightPct)}  (${leftBorder.toFixed(1)}px / ${rightBorder.toFixed(1)}px)`, 80, secY + 70);
+      ctx.fillText(`T/B: ${formatDist(topPct, bottomPct)}  (${topBorder.toFixed(1)}px / ${bottomBorder.toFixed(1)}px)`, 80, secY + 100);
+
+      // Section: Grade Predictions
+      const gradeY = secY + 140;
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(50, gradeY, canvas.width - 100, 130);
+      ctx.strokeStyle = '#334155';
+      ctx.strokeRect(50, gradeY, canvas.width - 100, 130);
+
+      ctx.font = 'bold 24px Arial';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('PREDICTED CENTERING GRADES', 80, gradeY + 35);
+
+      if (graderPredictions) {
+        const preds = [graderPredictions.psa, graderPredictions.bgs, graderPredictions.cgc];
+        const colW = (canvas.width - 200) / 3;
+        preds.forEach((p, i) => {
+          const cx = 100 + i * colW + colW / 2;
+          ctx.font = 'bold 18px Arial';
+          ctx.fillStyle = '#94a3b8';
+          ctx.textAlign = 'center';
+          ctx.fillText(p.company, cx, gradeY + 65);
+          ctx.font = 'bold 28px Arial';
+          ctx.fillStyle = p.meetsThreshold ? '#22c55e' : '#cbd5e1';
+          ctx.fillText(p.grade, cx, gradeY + 100);
+          ctx.font = '14px Arial';
+          ctx.fillStyle = '#64748b';
+          ctx.fillText(p.label, cx, gradeY + 120);
+        });
+        ctx.textAlign = 'left';
+      } else {
+        ctx.font = 'bold 36px Arial';
+        ctx.fillStyle = '#3b82f6';
+        ctx.textAlign = 'center';
+        ctx.fillText(potentialGrade, canvas.width / 2, gradeY + 90);
+        ctx.textAlign = 'left';
+      }
+
+      // Footer
+      ctx.font = '16px Arial';
+      ctx.fillStyle = '#475569';
       ctx.textAlign = 'center';
-      ctx.fillText('Centering Scores', canvas.width / 2, tableY + 180);
-      
-      ctx.font = '28px Arial';
-      ctx.textAlign = 'left';
-      
-      // Horizontal centering
-      ctx.fillText(`Horizontal Centering: ${formatNumber(horizontalCentering)}%`, tableX, tableY + 230);
-      ctx.fillRect(tableX, tableY + 240, tableWidth, 20);
-      ctx.fillStyle = getProgressColor(horizontalCentering);
-      ctx.fillRect(tableX, tableY + 240, tableWidth * (horizontalCentering / 100), 20);
-      
-      // Reset fill style
-      ctx.fillStyle = '#0f172a';
-      
-      // Vertical centering
-      ctx.fillText(`Vertical Centering: ${formatNumber(verticalCentering)}%`, tableX, tableY + 290);
-      ctx.fillRect(tableX, tableY + 300, tableWidth, 20);
-      ctx.fillStyle = getProgressColor(verticalCentering);
-      ctx.fillRect(tableX, tableY + 300, tableWidth * (verticalCentering / 100), 20);
-      
-      // Reset fill style
-      ctx.fillStyle = '#0f172a';
-      
-      // Overall centering
-      ctx.font = 'bold 32px Arial';
-      ctx.fillText(`Overall Centering: ${formatNumber(overallCentering)}%`, tableX, tableY + 350);
-      ctx.fillRect(tableX, tableY + 360, tableWidth, 30);
-      ctx.fillStyle = getProgressColor(overallCentering);
-      ctx.fillRect(tableX, tableY + 360, tableWidth * (overallCentering / 100), 30);
-      
-      // Reset fill style
-      ctx.fillStyle = '#0f172a';
-      
-      // Draw potential grade
-      ctx.font = 'bold 40px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Potential Grade', canvas.width / 2, tableY + 430);
-      
-      ctx.font = 'bold 36px Arial';
-      ctx.fillStyle = getProgressColor(overallCentering);
-      ctx.fillText(potentialGrade, canvas.width / 2, tableY + 480);
-      
-      // Draw footer
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '24px Arial';
-      ctx.fillText('Generated by Pokémon Card Analyzer', canvas.width / 2, canvas.height - 40);
-      
-      // Convert canvas to blob and download
+      ctx.fillText('Generated by Pokemon Card Analyzer', canvas.width / 2, canvas.height - 30);
+
       canvas.toBlob((blob) => {
-        if (!blob) {
-          console.error('Failed to convert canvas to blob');
-          return;
-        }
-        
+        if (!blob) return;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -383,431 +321,237 @@ export default function AnalysisResult({
       });
     };
   };
-  
+
   return (
-    <div className="flex flex-col lg:flex-row gap-6 w-full max-w-6xl mx-auto bg-white rounded-lg shadow-lg p-6">
+    <div className="flex flex-col lg:flex-row gap-6 w-full max-w-6xl mx-auto">
+      {/* Left Column: Card Image */}
       <div className="flex-1 flex flex-col items-center">
-        <h2 className="text-xl font-semibold mb-4">Card Analysis</h2>
-        
         <div className="relative w-full max-w-md mb-4">
-          <div className="overflow-auto max-h-[70vh] border border-gray-200 rounded-lg p-1">
-            <img 
-              src={edgeOverlayUrl || imageUrl} 
-              alt="Card with analysis overlay" 
-              className="w-full rounded-lg shadow-md"
+          <div className="overflow-auto max-h-[70vh] border border-gray-200 dark:border-gray-700 rounded-lg bg-black">
+            <img
+              src={edgeOverlayUrl || imageUrl}
+              alt="Card with analysis overlay"
+              className="w-full"
             />
-            
-            {/* Zoom Overlay - shows when border adjustments are made */}
-            {showZoomOverlay && (
-              <div 
-                className="bg-white border-4 border-black shadow-lg overflow-hidden transition-all duration-300 transform scale-100 z-10"
-                style={getZoomWindowStyle()}
+
+            {/* Zoom Overlay */}
+            {showZoomOverlay && focusedBorder && (
+              <div
+                className="bg-white dark:bg-gray-800 border-2 border-blue-500 shadow-lg overflow-hidden z-10"
+                style={getZoomStyle()}
               >
-                <div 
+                <div
                   className="w-full h-full"
                   style={{
                     backgroundImage: `url(${edgeOverlayUrl || imageUrl})`,
                     backgroundSize: '300%',
                     backgroundPosition: getZoomPosition().x + ' ' + getZoomPosition().y,
                     backgroundRepeat: 'no-repeat',
-                    transformOrigin: getZoomPosition().x + ' ' + getZoomPosition().y
                   }}
-                ></div>
-                <div className="absolute bottom-2 right-2 bg-black text-white text-xs px-2 py-0.5 rounded opacity-75">
-                  3x
-                </div>
-                {/* Border indicator */}
-                {focusedBorder === 'left' && (
-                  <div 
-                    className="absolute top-0 bottom-0 w-0.5 bg-red-500 animate-pulse" 
-                    style={{ left: '33.333%' }}
-                  ></div>
-                )}
-                {focusedBorder === 'right' && (
-                  <div 
-                    className="absolute top-0 bottom-0 w-0.5 bg-red-500 animate-pulse" 
-                    style={{ left: '66.666%' }}
-                  ></div>
-                )}
-                {focusedBorder === 'top' && (
-                  <div 
-                    className="absolute left-0 right-0 h-0.5 bg-red-500 animate-pulse" 
-                    style={{ top: '50%' }}
-                  ></div>
-                )}
-                {focusedBorder === 'bottom' && (
-                  <div 
-                    className="absolute left-0 right-0 h-0.5 bg-red-500 animate-pulse" 
-                    style={{ top: '66.666%' }}
-                  ></div>
-                )}
-                
-                {/* Crosshair */}
-                <div className="absolute left-1/2 top-1/2 w-8 h-8 pointer-events-none opacity-60" style={{ transform: 'translate(-50%, -50%)' }}>
-                  <div className="absolute left-1/2 top-0 bottom-0 w-px bg-black"></div>
-                  <div className="absolute top-1/2 left-0 right-0 h-px bg-black"></div>
-                </div>
+                />
+                <div className="absolute bottom-1 right-1 bg-black/75 text-white text-xs px-1.5 py-0.5 rounded">3x</div>
               </div>
             )}
           </div>
-          
-          <div className="absolute bottom-3 right-3 flex space-x-2">
-            {/* Adjustment toggle button */}
+
+          {/* Toggle fine-tuning */}
+          {onAdjustBorder && (
             <button
-              onClick={toggleAdjustmentControls}
-              className={`p-2 ${showAdjustmentControls ? 'bg-blue-600' : 'bg-gray-800 bg-opacity-70'} rounded-full text-white hover:bg-opacity-90`}
-              title="Toggle Fine-Tuning Controls"
+              onClick={() => setShowAdjustmentControls(!showAdjustmentControls)}
+              className={`absolute bottom-3 right-3 p-2 rounded-full text-white shadow ${showAdjustmentControls ? 'bg-blue-600' : 'bg-gray-800/70'} hover:opacity-90`}
+              title="Toggle Fine-Tuning"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
               </svg>
             </button>
-          </div>
+          )}
         </div>
-        
-        {/* Adjustment Controls */}
-        {showAdjustmentControls && (
-          <div className="w-full bg-blue-50 p-4 rounded-lg mb-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-medium text-blue-800">Fine-Tuning Controls</h3>
+
+        {/* Fine-Tuning Controls */}
+        {showAdjustmentControls && onAdjustBorder && (
+          <div className="w-full max-w-md bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg mb-4 border border-blue-200 dark:border-blue-800">
+            <h3 className="font-medium text-blue-800 dark:text-blue-300 mb-3 text-sm">Fine-Tuning Controls</h3>
+
+            <div className="flex gap-2 mb-3">
+              <button
+                className={`flex-1 py-1.5 text-sm rounded border ${adjustmentType === 'outer' ? 'bg-blue-100 dark:bg-blue-800 border-blue-500 font-medium' : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600'}`}
+                onClick={() => setAdjustmentType('outer')}
+              >
+                Outer Edges
+              </button>
+              <button
+                className={`flex-1 py-1.5 text-sm rounded border ${adjustmentType === 'inner' ? 'bg-blue-100 dark:bg-blue-800 border-blue-500 font-medium' : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600'}`}
+                onClick={() => setAdjustmentType('inner')}
+              >
+                Inner Edges
+              </button>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Left side: Border Selection */}
-              <div className="space-y-4">
-                {/* Border Type Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Border to Adjust
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button 
-                      className={`p-2 rounded-lg border ${adjustmentType === 'outer' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setAdjustmentType('outer')}
-                    >
-                      Outer Edges
-                    </button>
-                    <button 
-                      className={`p-2 rounded-lg border ${adjustmentType === 'inner' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setAdjustmentType('inner')}
-                    >
-                      Inner Edges
-                    </button>
-                  </div>
-                </div>
 
-                {/* Edge Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Edge
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button 
-                      className={`p-2 rounded-lg border ${focusedBorder === 'top' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setFocusedBorder('top')}
-                    >
-                      Top
-                    </button>
-                    <button 
-                      className={`p-2 rounded-lg border ${focusedBorder === 'bottom' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setFocusedBorder('bottom')}
-                    >
-                      Bottom
-                    </button>
-                    <button 
-                      className={`p-2 rounded-lg border ${focusedBorder === 'left' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setFocusedBorder('left')}
-                    >
-                      Left
-                    </button>
-                    <button 
-                      className={`p-2 rounded-lg border ${focusedBorder === 'right' ? 'bg-blue-100 border-blue-500 font-medium' : 'bg-white'}`}
-                      onClick={() => setFocusedBorder('right')}
-                    >
-                      Right
-                    </button>
+            {/* Directional controls */}
+            <div className="flex items-center justify-center gap-1">
+              <div className="flex flex-col items-center gap-1">
+                <button onClick={() => handleAdjust('top', -1)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700" title="Move top edge up">
+                  <ChevronUpIcon className="h-5 w-5" />
+                </button>
+                <div className="flex gap-1">
+                  <button onClick={() => handleAdjust('left', 1)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700" title="Move left edge left">
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                  </button>
+                  <div className="w-10 h-10 flex items-center justify-center bg-gray-200 dark:bg-gray-600 rounded text-xs font-mono">
+                    {focusedBorder ? focusedBorder[0].toUpperCase() : '-'}
                   </div>
+                  <button onClick={() => handleAdjust('right', 1)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700" title="Move right edge right">
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                  </button>
                 </div>
-
-                {/* Settings */}
-                <div className="space-y-2">
-                  {/* Zoom Focus Toggle */}
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="zoomFocus"
-                      checked={zoomFocus}
-                      onChange={(e) => setZoomFocus(e.target.checked)}
-                      className="w-4 h-4 text-blue-600"
-                    />
-                    <label htmlFor="zoomFocus" className="text-sm font-medium text-gray-700">
-                      Show magnifier when adjusting
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right side: Arrow Controls */}
-              <div className="flex flex-col items-center justify-center space-y-4">
-                <p className="text-sm font-medium text-gray-700">
-                  Move {focusedBorder || 'selected'} edge
-                </p>
-                
-                {!focusedBorder && (
-                  <div className="bg-yellow-50 p-4 rounded-lg text-center w-full">
-                    <p className="text-yellow-700 text-sm">Select an edge from the buttons on the left</p>
-                  </div>
-                )}
-                
-                {/* Top edge controls */}
-                {focusedBorder === 'top' && (
-                  <div className="grid grid-cols-1 gap-4">
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, 1)}
-                      title="Move top edge up (increase border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                      </svg>
-                    </button>
-                    
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, -1)}
-                      title="Move top edge down (decrease border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                
-                {/* Bottom edge controls */}
-                {focusedBorder === 'bottom' && (
-                  <div className="grid grid-cols-1 gap-4">
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, -1)}
-                      title="Move bottom edge up (decrease border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                      </svg>
-                    </button>
-                    
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, 1)}
-                      title="Move bottom edge down (increase border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                
-                {/* Left edge controls */}
-                {focusedBorder === 'left' && (
-                  <div className="grid grid-cols-1 gap-4">
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, 1)}
-                      title="Move left edge left (increase border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                      </svg>
-                    </button>
-                    
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, -1)}
-                      title="Move left edge right (decrease border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                
-                {/* Right edge controls */}
-                {focusedBorder === 'right' && (
-                  <div className="grid grid-cols-1 gap-4">
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, -1)}
-                      title="Move right edge left (decrease border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                      </svg>
-                    </button>
-                    
-                    <button 
-                      className="py-4 px-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-lg w-full flex justify-center"
-                      onClick={() => handleAdjustBorder(adjustmentType, focusedBorder, 1)}
-                      title="Move right edge right (increase border)"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                
-                <div className="text-center p-2 bg-gray-100 rounded-lg w-full">
-                  <span className="text-sm font-medium">
-                    {adjustmentType === 'outer' && 'Outer Edges'}
-                    {adjustmentType === 'inner' && 'Inner Edges'}
-                  </span>
-                </div>
-              </div>
-            </div>
-            
-            {/* Reset Adjustments Button */}
-            {onResetAdjustments && (
-              <div className="mt-6 flex justify-center">
-                <button
-                  onClick={onResetAdjustments}
-                  className="flex items-center py-2 px-4 bg-red-600 text-white rounded-lg shadow hover:bg-red-700"
-                  title="Reset all manual adjustments"
-                >
-                  <ArrowPathIcon className="h-5 w-5 mr-2" />
-                  Reset Adjustments
+                <button onClick={() => handleAdjust('bottom', 1)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700" title="Move bottom edge down">
+                  <ChevronDownIcon className="h-5 w-5" />
                 </button>
               </div>
-            )}
+            </div>
+
+            <div className="flex items-center gap-2 mt-3">
+              <input type="checkbox" id="zoomToggle" checked={zoomFocus} onChange={e => setZoomFocus(e.target.checked)} className="w-4 h-4" />
+              <label htmlFor="zoomToggle" className="text-xs text-gray-600 dark:text-gray-400">Show magnifier</label>
+            </div>
           </div>
         )}
-        
-        <div className="flex space-x-4">
-          <button
-            onClick={downloadAnalysis}
-            className="flex items-center justify-center py-2 px-4 bg-green-600 text-white rounded-lg shadow hover:bg-green-700"
-          >
-            <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
-            Download Report
+
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-2 w-full max-w-md">
+          <button onClick={downloadAnalysis} className="flex-1 flex items-center justify-center gap-2 py-2 px-3 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm">
+            <ArrowDownTrayIcon className="h-4 w-4" />
+            Download
           </button>
-          
-          <button
-            onClick={onReset}
-            className="flex items-center justify-center py-2 px-4 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700"
-          >
-            <ArrowPathIcon className="h-5 w-5 mr-2" />
-            Analyze Another
+          <button onClick={copyToClipboard} className="flex-1 flex items-center justify-center gap-2 py-2 px-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm">
+            {copied ? <CheckIcon className="h-4 w-4" /> : <ClipboardIcon className="h-4 w-4" />}
+            {copied ? 'Copied!' : 'Copy JSON'}
+          </button>
+          <button onClick={onReset} className="flex-1 flex items-center justify-center gap-2 py-2 px-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
+            <ArrowPathIcon className="h-4 w-4" />
+            New
           </button>
         </div>
       </div>
-      
-      <div className="flex-1">
-        <div className="bg-gray-50 rounded-lg shadow p-6">
-          <h3 className="text-lg font-medium mb-4 border-b pb-2">Centering Analysis</h3>
-          
-          <div className="mb-6">
-            <h4 className="font-medium mb-2">Overall Centering Grade</h4>
-            <div className={`text-3xl font-bold ${centeringColor}`}>
-              {centeringGradeLabel} ({formatPercentage(overallCentering)})
+
+      {/* Right Column: Analysis Data */}
+      <div className="flex-1 space-y-4">
+        {/* Multi-Grader Predictions */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Centering Grade Predictions</h3>
+
+          {graderPredictions ? (
+            <div className="grid grid-cols-3 gap-3">
+              {[graderPredictions.psa, graderPredictions.bgs, graderPredictions.cgc].map(pred => (
+                <div key={pred.company} className={`rounded-lg border-2 p-3 text-center ${getGraderStyle(pred.meetsThreshold)}`}>
+                  <div className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">{pred.company}</div>
+                  <div className={`text-xl font-bold ${getGraderGradeColor(pred.meetsThreshold)}`}>{pred.grade.split(' ')[1]}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{pred.label}</div>
+                  {pred.meetsThreshold && (
+                    <div className="mt-1 inline-block px-1.5 py-0.5 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 text-[10px] font-medium rounded">
+                      TOP GRADE
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{potentialGrade}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Overall Centering */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Centering Scores</h3>
+
+          <div className={`text-3xl font-bold mb-4 ${getScoreColor(overallCentering)}`}>
+            {overallCentering.toFixed(1)}%
+            <span className="text-base font-normal text-gray-500 dark:text-gray-400 ml-2">Overall</span>
+          </div>
+
+          {/* Horizontal */}
+          <div className="mb-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600 dark:text-gray-400">Horizontal</span>
+              <span className={`font-medium ${getScoreColor(horizontalCentering)}`}>{horizontalCentering.toFixed(1)}%</span>
+            </div>
+            <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${getProgressColor(horizontalCentering)}`} style={{ width: `${horizontalCentering}%` }} />
             </div>
           </div>
-          
-          <div className="mb-6">
-            <h4 className="font-medium mb-2">Centering Details</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-sm text-gray-600">Horizontal Centering</div>
-                <div className="text-lg font-semibold">{formatPercentage(horizontalCentering)}</div>
-                <div className="text-xs text-gray-500">Left/Right: {horizontalDistribution}</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Vertical Centering</div>
-                <div className="text-lg font-semibold">{formatPercentage(verticalCentering)}</div>
-                <div className="text-xs text-gray-500">Top/Bottom: {verticalDistribution}</div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="mb-6">
-            <h4 className="font-medium mb-2">Border Measurements</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span>Left Border:</span>
-                  <span className="font-medium">{leftBorder.toFixed(1)}px</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Right Border:</span>
-                  <span className="font-medium">{rightBorder.toFixed(1)}px</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Top Border:</span>
-                  <span className="font-medium">{topBorder.toFixed(1)}px</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Bottom Border:</span>
-                  <span className="font-medium">{bottomBorder.toFixed(1)}px</span>
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span>Horizontal Ratio:</span>
-                  <span className="font-medium">{formatRatio(horizontalRatio)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Vertical Ratio:</span>
-                  <span className="font-medium">{formatRatio(verticalRatio)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>L/R Distribution:</span>
-                  <span className="font-medium">{horizontalDistribution}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>T/B Distribution:</span>
-                  <span className="font-medium">{verticalDistribution}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="mb-6">
-            <h4 className="font-medium mb-2">Distribution Visualization</h4>
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-sm text-gray-600">Left-Right Distribution</span>
-                  <span className="text-sm text-gray-600">{horizontalDistribution}</span>
-                </div>
-                <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div className="bg-blue-500 h-full float-left" style={{ width: `${leftPercent}%` }}></div>
-                  <div className="bg-green-500 h-full float-left" style={{ width: `${rightPercent}%` }}></div>
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-sm text-gray-600">Top-Bottom Distribution</span>
-                  <span className="text-sm text-gray-600">{verticalDistribution}</span>
-                </div>
-                <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div className="bg-blue-500 h-full float-left" style={{ width: `${topPercent}%` }}></div>
-                  <div className="bg-green-500 h-full float-left" style={{ width: `${bottomPercent}%` }}></div>
-                </div>
-              </div>
-            </div>
-          </div>
-          
+
+          {/* Vertical */}
           <div>
-            <h4 className="font-medium mb-2">PSA Potential Grade</h4>
-            <div className="text-2xl font-bold text-blue-600">{potentialGrade}</div>
-            <p className="text-sm text-gray-500 mt-1">
-              Based on centering metrics only. Actual grade depends on additional factors.
-            </p>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600 dark:text-gray-400">Vertical</span>
+              <span className={`font-medium ${getScoreColor(verticalCentering)}`}>{verticalCentering.toFixed(1)}%</span>
+            </div>
+            <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${getProgressColor(verticalCentering)}`} style={{ width: `${verticalCentering}%` }} />
+            </div>
           </div>
+        </div>
+
+        {/* Distribution */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Distribution</h3>
+
+          <div className="space-y-3">
+            {/* L/R */}
+            <div className={`rounded-lg p-3 ${getDiffColor(hDiffPct).bg}`}>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm font-medium">Left / Right</span>
+                <span className={`text-sm font-bold ${getDiffColor(hDiffPct).text}`}>
+                  {formatDist(leftPct, rightPct)} ({hDiffPct.toFixed(1)}% diff)
+                </span>
+              </div>
+              <div className="w-full h-3 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden flex">
+                <div className="bg-blue-500 h-full" style={{ width: `${leftPct}%` }} />
+                <div className="bg-orange-500 h-full" style={{ width: `${rightPct}%` }} />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>L: {leftBorder.toFixed(1)}px</span>
+                <span>R: {rightBorder.toFixed(1)}px</span>
+              </div>
+            </div>
+
+            {/* T/B */}
+            <div className={`rounded-lg p-3 ${getDiffColor(vDiffPct).bg}`}>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm font-medium">Top / Bottom</span>
+                <span className={`text-sm font-bold ${getDiffColor(vDiffPct).text}`}>
+                  {formatDist(topPct, bottomPct)} ({vDiffPct.toFixed(1)}% diff)
+                </span>
+              </div>
+              <div className="w-full h-3 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden flex">
+                <div className="bg-blue-500 h-full" style={{ width: `${topPct}%` }} />
+                <div className="bg-orange-500 h-full" style={{ width: `${bottomPct}%` }} />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <span>T: {topBorder.toFixed(1)}px</span>
+                <span>B: {bottomBorder.toFixed(1)}px</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Grading Thresholds Reference */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Centering Thresholds</h3>
+          <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
+            <div className="flex justify-between"><span>PSA 10 (Gem Mint)</span><span>55/45 or better</span></div>
+            <div className="flex justify-between"><span>BGS 10 (Black Label)</span><span>50/50 perfect</span></div>
+            <div className="flex justify-between"><span>BGS 9.5 (Gem Mint)</span><span>55/45 or better</span></div>
+            <div className="flex justify-between"><span>CGC 10 (Pristine)</span><span>55/45 or better</span></div>
+          </div>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3 italic">
+            Based on centering only. Actual grades depend on surface, edges, and corners.
+          </p>
         </div>
       </div>
     </div>
   );
-} 
+}
