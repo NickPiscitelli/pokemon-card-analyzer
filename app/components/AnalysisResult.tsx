@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CardMeasurements, MultiGraderPredictions, CardAnalyzer } from '~/models/cardAnalysisModel';
+import { CardMeasurements, MultiGraderPredictions, CardAnalyzer, CardDetectionInfo } from '~/models/cardAnalysisModel';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -15,6 +15,8 @@ interface AnalysisResultProps {
   measurements: CardMeasurements;
   potentialGrade: string;
   graderPredictions?: MultiGraderPredictions;
+  detectionInfo?: CardDetectionInfo;
+  detectionMethod?: string;
   onBack: () => void;
   onReset: () => void;
   onAdjustBorder?: (
@@ -31,6 +33,8 @@ export default function AnalysisResult({
   measurements,
   potentialGrade,
   graderPredictions,
+  detectionInfo,
+  detectionMethod,
   onBack,
   onReset,
   onAdjustBorder,
@@ -437,6 +441,53 @@ export default function AnalysisResult({
 
       {/* Right Column: Analysis Data */}
       <div className="flex-1 space-y-4">
+        {/* Detection Info */}
+        {(detectionInfo || detectionMethod) && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Detection</h3>
+            <div className="flex flex-wrap gap-2">
+              {detectionInfo?.borderColor && detectionInfo.borderColor !== 'unknown' && (
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  detectionInfo.borderColor === 'black' ? 'bg-gray-800 text-white dark:bg-gray-600' :
+                  detectionInfo.borderColor === 'white' ? 'bg-gray-100 text-gray-800 border border-gray-300 dark:bg-gray-200' :
+                  detectionInfo.borderColor === 'yellow' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300' :
+                  'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${
+                    detectionInfo.borderColor === 'black' ? 'bg-white' :
+                    detectionInfo.borderColor === 'white' ? 'bg-gray-800' :
+                    detectionInfo.borderColor === 'yellow' ? 'bg-yellow-500' :
+                    'bg-gray-400'
+                  }`} />
+                  {detectionInfo.borderColor.charAt(0).toUpperCase() + detectionInfo.borderColor.slice(1)} border
+                </span>
+              )}
+              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                (detectionInfo?.confidence ?? 0) >= 0.7 ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' :
+                (detectionInfo?.confidence ?? 0) >= 0.4 ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300' :
+                'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+              }`}>
+                {Math.round((detectionInfo?.confidence ?? 0) * 100)}% confidence
+              </span>
+              {(detectionInfo?.detectionMethod || detectionMethod) && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                  {detectionInfo?.detectionMethod || detectionMethod}
+                </span>
+              )}
+              {detectionInfo?.perspectiveCorrected && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
+                  Perspective corrected
+                </span>
+              )}
+            </div>
+            {detectionInfo?.backgroundRecommendation && (
+              <div className="mt-3 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded text-xs text-amber-700 dark:text-amber-400">
+                {detectionInfo.backgroundRecommendation}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Multi-Grader Predictions */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
           <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Centering Grade Predictions</h3>

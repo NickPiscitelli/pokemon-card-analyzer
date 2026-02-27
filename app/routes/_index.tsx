@@ -409,6 +409,8 @@ export default function Index() {
                   measurements={analysisResult.measurements}
                   potentialGrade={analysisResult.potentialGrade}
                   graderPredictions={analysisResult.graderPredictions}
+                  detectionInfo={analysisResult.detectionInfo}
+                  detectionMethod={analysisResult.detectionMethod}
                   onBack={resetAnalysis}
                   onReset={resetAnalysis}
                   onAdjustBorder={cardAnalyzerRef.current ? handleAdjustBorder : undefined}

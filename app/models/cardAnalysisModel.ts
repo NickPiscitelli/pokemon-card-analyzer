@@ -1,3 +1,5 @@
+import { CardDetectorV2, CardDetectionInfo, BorderColor } from './cardDetectionV2';
+
 // Check if we're in a browser environment
 const isBrowser = typeof window !== 'undefined' && typeof window.document !== 'undefined';
 
@@ -93,7 +95,10 @@ export interface CardAnalysisResult {
   graderPredictions: MultiGraderPredictions;
   analyzer?: CardAnalyzer;
   detectionMethod?: string;
+  detectionInfo?: CardDetectionInfo;
 }
+
+export type { CardDetectionInfo, BorderColor };
 
 export class CardAnalyzer {
   private gl: WebGLRenderingContext | null = null;
@@ -259,16 +264,73 @@ export class CardAnalyzer {
 
   async analyzeCard(imageElement: HTMLImageElement | HTMLCanvasElement): Promise<CardAnalysisResult> {
     try {
-      // Process the image with WebGL for edge detection
-      const { yellowBorderData, contrastData } = await this.processImageWithWebGL(imageElement);
-
-      // Get dimensions
+      // Store image dimensions for future calculations
       const width = imageElement.width;
       const height = imageElement.height;
-      
-      // Store image dimensions for future calculations
       this.imageWidth = width;
       this.imageHeight = height;
+
+      // ── Try V2 detection first ────────────────────────────────
+      let detectionInfo: CardDetectionInfo | undefined;
+      try {
+        const v2 = new CardDetectorV2();
+        const v2Result = await v2.analyzeCard(imageElement);
+
+        if (v2Result.info.confidence >= 0.3) {
+          // Use V2 results
+          const imageSource = v2Result.correctedCanvas || imageElement;
+          const usedWidth = imageSource.width;
+          const usedHeight = imageSource.height;
+
+          if (v2Result.correctedCanvas) {
+            this.imageWidth = usedWidth;
+            this.imageHeight = usedHeight;
+          }
+
+          this.cardEdges = {
+            left: Math.round(v2Result.edges.left),
+            right: Math.round(v2Result.edges.right),
+            top: Math.round(v2Result.edges.top),
+            bottom: Math.round(v2Result.edges.bottom),
+          };
+
+          this.innerEdges = {
+            left: this.cardEdges.left + 10,
+            right: this.cardEdges.right - 10,
+            top: this.cardEdges.top + 10,
+            bottom: this.cardEdges.bottom - 10,
+          };
+
+          this.lastMeasurements = this.measureCardBorders(this.cardEdges);
+          this.detectionMethod = v2Result.info.detectionMethod;
+          detectionInfo = v2Result.info;
+
+          const fullImageData = this.createImageData(imageSource);
+          const cardCanvas = this.extractCardRegion(imageSource, this.cardEdges);
+          const cardImageData = this.createImageData(cardCanvas);
+
+          const slabEdges = v2Result.correctedCanvas ? null : this.detectSlabEdgesFromContrast(imageElement);
+          const overlay = this.createEdgeOverlay(imageSource, this.cardEdges, slabEdges, this.innerEdges);
+
+          return {
+            measurements: this.lastMeasurements,
+            imageUrl: imageElement instanceof HTMLImageElement ? imageElement.src : undefined,
+            cardImageData,
+            fullImageData,
+            edgeOverlayImageData: overlay,
+            edgeOverlayUrl: this.createDataURL(overlay),
+            potentialGrade: this.calculatePotentialGrade(this.lastMeasurements),
+            graderPredictions: this.calculateMultiGraderPredictions(this.lastMeasurements),
+            detectionMethod: this.detectionMethod,
+            detectionInfo,
+          };
+        }
+      } catch (v2Error) {
+        console.warn('V2 detection failed, falling back to V1:', v2Error);
+      }
+
+      // ── V1 fallback: WebGL yellow + contrast ─────────────────
+      const { yellowBorderData, contrastData } = await this.processImageWithWebGL(imageElement);
 
       // Detect slab edges (optional, can be null)
       const slabEdges = this.detectSlabEdges(contrastData, width, height);
@@ -287,16 +349,26 @@ export class CardAnalyzer {
         bottom: this.cardEdges.bottom - 10
       };
 
+      // Determine V1 detection method
+      let v1Method = 'V1-WebGL-Contrast';
+      // Check if yellow detection was used by seeing if there are yellow pixels
+      let yellowCount = 0;
+      for (let i = 0; i < yellowBorderData.length; i++) {
+        if (yellowBorderData[i] > 0.5) yellowCount++;
+      }
+      if (yellowCount > 100) v1Method = 'V1-WebGL-Yellow';
+      this.detectionMethod = v1Method;
+
       // Measure borders
       this.lastMeasurements = this.measureCardBorders(cardEdges);
-      
+
       // Create full image data
       const fullImageData = this.createImageData(imageElement);
-      
+
       // Extract the card region
       const cardCanvas = this.extractCardRegion(imageElement, cardEdges);
       const cardImageData = this.createImageData(cardCanvas);
-      
+
       // Create visualization overlay
       const overlay = this.createEdgeOverlay(imageElement, cardEdges, slabEdges, this.innerEdges);
 
@@ -315,6 +387,50 @@ export class CardAnalyzer {
       console.error("Error analyzing card:", error);
       return this.createDummyResult();
     }
+  }
+
+  private detectSlabEdgesFromContrast(imageElement: HTMLImageElement | HTMLCanvasElement): {
+    left: number; right: number; top: number; bottom: number;
+  } | null {
+    try {
+      if (!this.gl || !this.program) return null;
+      const { contrastData } = this.processImageWithWebGLSync(imageElement);
+      return this.detectSlabEdges(contrastData, imageElement.width, imageElement.height);
+    } catch {
+      return null;
+    }
+  }
+
+  private processImageWithWebGLSync(image: HTMLImageElement | HTMLCanvasElement): {
+    yellowBorderData: Float32Array;
+    contrastData: Float32Array;
+  } {
+    if (!this.gl || !this.program) {
+      throw new Error('WebGL not initialized');
+    }
+
+    this.setupWebGLContext(image.width, image.height);
+    const texture = this.createTexture(image);
+    if (!texture) throw new Error('Failed to create texture');
+
+    this.gl.useProgram(this.program);
+    const resolutionLocation = this.gl.getUniformLocation(this.program, 'u_resolution');
+    this.gl.uniform2f(resolutionLocation, image.width, image.height);
+    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+
+    const pixels = new Uint8Array(image.width * image.height * 4);
+    this.gl.readPixels(0, 0, image.width, image.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+
+    const yellowBorderData = new Float32Array(image.width * image.height);
+    const contrastData = new Float32Array(image.width * image.height);
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const idx = i / 4;
+      yellowBorderData[idx] = pixels[i] / 255;
+      contrastData[idx] = pixels[i + 1] / 255;
+    }
+
+    return { yellowBorderData, contrastData };
   }
 
   private detectSlabEdges(contrastData: Float32Array, width: number, height: number): { 
